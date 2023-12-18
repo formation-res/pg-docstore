@@ -1,0 +1,12 @@
+# IDEs
+.idea/
+*.iml
+/.project
+/.settings/
+.vscode
+
+# Project
+.gradle
+build
+out
+bin
