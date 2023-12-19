@@ -28,7 +28,7 @@ suspend fun SuspendingConnection.reCreateDocStoreSchema(tableName: String = "doc
                 drop table if exists $tableName;
                 
                 CREATE TABLE "$tableName" (
-                  id       varchar(255) PRIMARY KEY,
+                  id       text PRIMARY KEY,
                   created_at timestamptz DEFAULT current_timestamp,
                   updated_at timestamptz DEFAULT current_timestamp,            
                   json     text,
