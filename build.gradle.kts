@@ -14,6 +14,7 @@ repositories {
 dependencies {
     implementation(KotlinX.coroutines.jdk8)
     implementation(KotlinX.coroutines.slf4j)
+    implementation(KotlinX.serialization.json)
     implementation(KotlinX.datetime)
     implementation("io.github.microutils:kotlin-logging:_")
 
