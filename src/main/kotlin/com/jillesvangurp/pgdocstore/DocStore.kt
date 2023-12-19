@@ -215,7 +215,9 @@ class DocStore<T : Any>(
         }
     }
 
-    suspend fun queryFlow(query: String, params: List<Any>) : Flow<T> {
+    suspend fun documentsByRecency() = queryFlow("SELECT * FROM $tableName ORDER BY updated_at DESC", listOf())
+
+    suspend fun queryFlow(query: String, params: List<Any>, fetchSize: Int = 100) : Flow<T> {
         // use channelFlow for thread safety
         return channelFlow {
             val producer = this
@@ -231,7 +233,7 @@ class DocStore<T : Any>(
 
                     var resp: QueryResult? = null
                     while (resp == null || resp.rows.isNotEmpty()) {
-                        resp = c.sendQuery("FETCH 100 FROM $cursorId;")
+                        resp = c.sendQuery("FETCH $fetchSize FROM $cursorId;")
                         resp.rows.forEach { row ->
                             val doc = json.decodeFromString(serializationStrategy,row.getString("json")?: error("empty json"))
                             producer.send(doc)
