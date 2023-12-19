@@ -1,15 +1,9 @@
 package com.jillesvangurp.pgdocstore
 
 import io.kotest.matchers.shouldBe
-import kotlinx.coroutines.flow.count
-import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.Serializable
-import org.junit.jupiter.api.AfterAll
-import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 import java.util.*
-import kotlin.random.Random
-import kotlin.random.nextULong
 
 @Serializable
 data class TestModel(val property: String)
@@ -18,7 +12,7 @@ data class TestModel(val property: String)
 data class TestModelWithId(val property: String, val id: String = UUID.randomUUID().toString())
 
 
-class DocStoreTest : DbTest() {
+class DocStoreTest : DbTestBase() {
 
     @Test
     fun shouldDoCrud() = coRun {
@@ -51,8 +45,5 @@ class DocStoreTest : DbTest() {
         ds.getById(doc.id)?.property shouldBe "bar"
         ds.delete(doc)
         ds.getById(doc.id) shouldBe null
-
     }
-
-
 }

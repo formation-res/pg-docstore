@@ -1,6 +1,8 @@
 package com.jillesvangurp.pgdocstore
 
+import com.github.jasync.sql.db.SuspendingConnection
 import com.github.jasync.sql.db.asSuspending
+import com.github.jasync.sql.db.interceptor.LoggingInterceptorSupplier
 import com.github.jasync.sql.db.postgresql.PostgreSQLConnectionBuilder
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -16,7 +18,7 @@ import kotlin.time.Duration.Companion.minutes
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS) // needed so we can have @BeforeAll on non static functions
 @Execution(ExecutionMode.CONCURRENT)
-open class DbTest {
+open class DbTestBase {
     val tableName = "docs_${Random.nextULong()}"
     @BeforeAll
     fun beforeAll() = coRun {
@@ -50,6 +52,14 @@ fun connect(
     db: String = "docstore",
     user: String = "postgres",
     password: String = "secret"
-) = PostgreSQLConnectionBuilder.createConnectionPool(
-    """jdbc:postgresql://$host:$port/$db?user=$user&password=$password"""
-).asSuspending
+): SuspendingConnection {
+    return PostgreSQLConnectionBuilder.createConnectionPool {
+        this.host = host
+        this.port = port
+        this.database = db
+        this.username = user
+        this.password = password
+
+        this.interceptors = mutableListOf(LoggingInterceptorSupplier())
+    }.asSuspending
+}

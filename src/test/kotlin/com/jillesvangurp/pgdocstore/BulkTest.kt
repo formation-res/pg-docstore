@@ -9,7 +9,7 @@ import kotlin.random.Random
 import kotlin.random.nextULong
 
 
-class BulkTest : DbTest() {
+class BulkTest : DbTestBase() {
     @Test
     fun shouldBulkInsert() = coRun {
         val docFlow = flow {

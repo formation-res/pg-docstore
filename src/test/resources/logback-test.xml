@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<configuration debug="true">
+<configuration debug="false">
 
     <contextListener class="ch.qos.logback.classic.jul.LevelChangePropagator">
         <resetJUL>true</resetJUL>
@@ -8,7 +8,7 @@
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
             <pattern>
-                %boldBlue(%date{dd-MM-yyyy'T'HH:mm:ssZ}) %highlight(%.-1level .\(%file:%line\) %thread %logger{0}) - %msg %highlight(%mdc) %n
+                %boldBlue(%date{dd-MM-yyyy'T'HH:mm:ssZ}) %highlight(%.-1level .\(%file:%line\) %thread %logger{200}) - %msg %highlight(%mdc) %n
             </pattern>
         </encoder>
     </appender>
@@ -28,7 +28,14 @@
         </encoder>
     </appender>
 
-    <root level="INFO">
+    <!-- turn off some noisy loggers -->
+    <logger name="com.github.jasync.sql.db.util.NettyUtils" level="WARN" />
+    <logger name="com.github.jasync.sql" level="WARN" />
+    <logger name="io.netty" level="WARN" />
+    <!-- the tests use the LoggingInterceptorSupplier, so we want to see that -->
+    <logger name="com.github.jasync.sql.QueryLog" level="DEBUG" />
+
+    <root level="DEBUG">
         <appender-ref ref="ASYNC-STDOUT"/>
         <appender-ref ref="FILE"/>
     </root>

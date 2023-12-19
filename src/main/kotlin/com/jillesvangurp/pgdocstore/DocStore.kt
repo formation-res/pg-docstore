@@ -4,7 +4,6 @@ import com.github.jasync.sql.db.QueryResult
 import com.github.jasync.sql.db.SuspendingConnection
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant

@@ -1,14 +1,17 @@
+@file:OptIn(ExperimentalSerializationApi::class)
+
 package com.jillesvangurp.pgdocstore
 
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 
 val DEFAULT_JSON: Json = Json {
     // don't rely on external systems being written in kotlin or even having a language with default values
-    // the default of false is FFing insane and dangerous
+    // the default of false is dangerous
     encodeDefaults = true
     // save space
     prettyPrint = false
-    // people adding shit to the json is OK, we're forward compatible and will just ignore it
+    // people adding things to the json is OK, we're forward compatible and will just ignore it
     isLenient = true
     // encoding nulls is meaningless and a waste of space.
     explicitNulls = false
