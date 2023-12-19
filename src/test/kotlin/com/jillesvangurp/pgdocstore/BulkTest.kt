@@ -1,14 +1,11 @@
 package com.jillesvangurp.pgdocstore
 
 import io.kotest.matchers.shouldBe
-import kotlinx.coroutines.flow.count
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.toList
 import org.junit.jupiter.api.Test
-import java.util.*
 import kotlin.random.Random
 import kotlin.random.nextULong
-
 
 class BulkTest : DbTestBase() {
     @Test

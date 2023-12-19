@@ -214,7 +214,17 @@ class DocStore<T : Any>(
         }
     }
 
-    suspend fun documentsByRecency() = queryFlow("SELECT * FROM $tableName ORDER BY updated_at DESC", listOf())
+    suspend fun documentsByRecency(tags: List<String> = emptyList(), orTags: Boolean=false): Flow<T> {
+        val whereClause = if(tags.isEmpty()) {
+            ""
+        } else {
+            "WHERE " +
+            tags.joinToString(if (orTags) " OR " else " AND ") { "? = ANY(tags)" }
+        }
+
+        return queryFlow("SELECT * FROM $tableName $whereClause ORDER BY updated_at DESC", tags)
+    }
+
 
     suspend fun queryFlow(query: String, params: List<Any>, fetchSize: Int = 100): Flow<T> {
         // use channelFlow for thread safety
