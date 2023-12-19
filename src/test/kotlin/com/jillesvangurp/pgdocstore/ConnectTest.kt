@@ -1,48 +1,88 @@
 package com.jillesvangurp.pgdocstore
 
-import com.github.jasync.sql.db.Connection
-import com.github.jasync.sql.db.asSuspending
-import com.github.jasync.sql.db.postgresql.PostgreSQLConnectionBuilder.createConnectionPool
+import com.github.jasync.sql.db.QueryResult
 import io.kotest.matchers.shouldBe
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.Test
-import kotlin.time.Duration
-import kotlin.time.Duration.Companion.minutes
+import java.util.UUID
+import kotlin.random.Random
+import kotlin.random.nextULong
 
 
-fun coRun(timeout: Duration = 1.minutes, block: suspend () -> Unit) {
-    runBlocking {
-        withTimeout(timeout) {
-            block.invoke()
-        }
-    }
-}
-
-class ConnectTest {
+@Suppress("UNCHECKED_CAST")
+class ConnectTest : DbTest() {
 
     @Test
     fun shouldConnect() = coRun {
-        val connection = connect()
-
-        connection.sendPreparedStatement(
+        db.sendPreparedStatement(
             """select 1+1 as answer""", listOf()
         ).let {
-            it.statusMessage?.let { println(it) }
-            it.rows.columnNames().let {
-                println(it)
-            }
             it.rows.first()["answer"] shouldBe 2
+        }
+
+        db.inTransaction { c ->
+            c.sendQuery("select 2+2 as answer").let { qr ->
+                qr.rows.first()["answer"] shouldBe 4
+            }
+        }
+    }
+
+    @Test
+    fun shouldCreateTableAndMessWithSomeCursors() = coRun {
+        db.reCreateDocStoreSchema()
+
+        val ids = mutableSetOf<String>()
+        db.inTransaction { c->
+            repeat(2000) {count ->
+                val id = UUID.randomUUID().toString()
+                ids.add(id)
+                val text = """
+                    OHAI, this is doc #$count
+                """.trimIndent()
+                val tags = listOf("foo", "bar")
+                c.sendPreparedStatement(
+                    """
+                        INSERT INTO docstore (id, json,tags)
+                        VALUES (?,?,?); 
+                    """.trimIndent(),
+                    listOf(id,text,tags)
+                )
+            }
+        }
+        db.inTransaction {c->
+            c.sendQuery("select count(*) as count from docstore").rows.first()["count"] shouldBe 2000
+
+            val cursorId = "cursor_${Random.nextULong()}"
+            c.sendQuery("""
+                DECLARE $cursorId CURSOR FOR 
+                select * from docstore 
+                order by id;
+            """.trimIndent())
+
+            val fetchedIds = mutableListOf<String>()
+            try {
+                println("$cursorId created")
+                var resp: QueryResult? = null
+                while (resp == null || resp.rows.isNotEmpty()) {
+                    println("FETCH")
+                    resp = c.sendQuery("FETCH 99 FROM $cursorId;")
+                    resp.rows.forEach { row ->
+                        fetchedIds.add(row.getString("id")!!)
+                    }
+                }
+            } finally {
+                println("closing")
+                c.sendQuery("CLOSE $cursorId;")
+            }
+            fetchedIds.size shouldBe 2000
+
+            c.sendPreparedStatement(
+                """SELECT tags from docstore where id = ?""", listOf(fetchedIds.first())
+            ).let { qr ->
+                val ts = qr.rows.first()["tags"]!! as List<String>
+
+                println(ts)
+            }
         }
     }
 }
 
-fun connect(
-    host: String = "localhost",
-    port: Int = 5432,
-    db: String = "docstore",
-    user: String = "postgres",
-    password: String = "secret"
-) = createConnectionPool(
-    """jdbc:postgresql://$host:$port/$db?user=$user&password=$password"""
-).asSuspending

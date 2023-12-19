@@ -17,7 +17,11 @@ open class DbTest {
         }
     }
 
-
+    init {
+        runBlocking {
+            db.reCreateDocStoreSchema()
+        }
+    }
 }
 
 val db by lazy { connect() }
