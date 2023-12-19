@@ -16,12 +16,13 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 class DocStore<T : Any>(
+    // not private so people can have their own extension functions using this
     val connection: SuspendingConnection,
-    val serializationStrategy: KSerializer<T>,
-    val tableName: String,
-    val json: Json = DEFAULT_JSON,
-    val tagExtractor: (T) -> List<String> = { listOf() },
-    val idExtractor: (T) -> String = { d ->
+    private val serializationStrategy: KSerializer<T>,
+    private val tableName: String,
+    private val json: Json = DEFAULT_JSON,
+    private val tagExtractor: (T) -> List<String> = { listOf() },
+    private val idExtractor: (T) -> String = { d ->
         val p = d::class.members.find { it.name == "id" } as KProperty<*>?
         p?.getter?.call(d)?.toString() ?: error("property id not found")
     },
@@ -38,14 +39,14 @@ class DocStore<T : Any>(
     suspend fun create(id: String, doc: T, timestamp: Instant = Clock.System.now()) {
         val txt = json.encodeToString(serializationStrategy, doc)
         val tags = tagExtractor.invoke(doc)
-        connection.inTransaction { c ->
-            c.sendPreparedStatement(
-                """
+
+        connection.sendPreparedStatement(
+            """
                 INSERT INTO $tableName (id, created_at, updated_at, json, tags)
                 VALUES (?,?,?,?,?)
             """.trimIndent(), listOf(id, timestamp, timestamp, txt, tags)
-            )
-        }
+        )
+
     }
 
     suspend fun getById(id: String): T? {
@@ -76,22 +77,21 @@ class DocStore<T : Any>(
         timestamp: Instant = Clock.System.now(),
         updateFunction: (T) -> T
     ): T {
-        val newValue = connection.inTransaction { c ->
-            c.sendPreparedStatement(
-                """
-            select json from $tableName where id = ?
-        """.trimIndent(), listOf(id)
-            ).let {
-                if (it.rows.isNotEmpty()) {
-                    val firstRow = it.rows.first()
+        val newValue = connection.sendPreparedStatement(
+            """
+                select json from $tableName where id = ?
+            """.trimIndent(), listOf(id)
+        ).let {
+            if (it.rows.isNotEmpty()) {
+                val firstRow = it.rows.first()
 
-                    firstRow.getString("json")?.let { str ->
-                        json.decodeFromString(serializationStrategy, str).let { original ->
-                            val updated = updateFunction.invoke(original)
-                            val tags = tagExtractor.invoke(updated)
-                            val txt = json.encodeToString(serializationStrategy, updated)
-                            c.sendPreparedStatement(
-                                """
+                firstRow.getString("json")?.let { str ->
+                    json.decodeFromString(serializationStrategy, str).let { original ->
+                        val updated = updateFunction.invoke(original)
+                        val tags = tagExtractor.invoke(updated)
+                        val txt = json.encodeToString(serializationStrategy, updated)
+                        connection.sendPreparedStatement(
+                            """
                                 UPDATE $tableName
                                 SET 
                                     updated_at = ?,
@@ -99,16 +99,16 @@ class DocStore<T : Any>(
                                     tags = ?
                                 WHERE id = ?    
                             """.trimIndent(), listOf(timestamp, txt, tags, id)
-                            )
-                            updated
-                        }
-                    } ?: error("row has no json")
-                } else {
-                    // FIXME exception handling
-                    error("not found")
-                }
+                        )
+                        updated
+                    }
+                } ?: error("row has no json")
+            } else {
+                // FIXME exception handling
+                error("not found")
             }
         }
+
         return newValue
     }
 
@@ -203,9 +203,9 @@ class DocStore<T : Any>(
         }.flatten()
 
         // Create and execute the PreparedStatement
-        connection.inTransaction { c ->
-            c.sendPreparedStatement(sql, params)
-        }
+
+        connection.sendPreparedStatement(sql, params)
+
     }
 
     suspend fun count(): Long {
@@ -216,33 +216,34 @@ class DocStore<T : Any>(
 
     suspend fun documentsByRecency() = queryFlow("SELECT * FROM $tableName ORDER BY updated_at DESC", listOf())
 
-    suspend fun queryFlow(query: String, params: List<Any>, fetchSize: Int = 100) : Flow<T> {
+    suspend fun queryFlow(query: String, params: List<Any>, fetchSize: Int = 100): Flow<T> {
         // use channelFlow for thread safety
         return channelFlow {
             val producer = this
-            connection.inTransaction {c ->
-                val cursorId = "cursor_${Random.nextULong()}"
+            val cursorId = "cursor_${Random.nextULong()}"
+            connection.inTransaction { c ->
                 try {
                     c.sendPreparedStatement(
                         """
-                            DECLARE $cursorId CURSOR FOR 
-                            $query
-                        """.trimIndent(), params
+                                DECLARE $cursorId CURSOR FOR 
+                                $query
+                            """.trimIndent(), params
                     )
 
                     var resp: QueryResult? = null
                     while (resp == null || resp.rows.isNotEmpty()) {
                         resp = c.sendQuery("FETCH $fetchSize FROM $cursorId;")
                         resp.rows.forEach { row ->
-                            val doc = json.decodeFromString(serializationStrategy,row.getString("json")?: error("empty json"))
+                            val doc =
+                                json.decodeFromString(serializationStrategy, row.getString("json") ?: error("empty json"))
                             producer.send(doc)
                         }
                     }
-
                 } finally {
                     c.sendQuery("CLOSE $cursorId;")
                 }
             }
+
         }
     }
 }
