@@ -4,9 +4,14 @@ import com.github.jasync.sql.db.asSuspending
 import com.github.jasync.sql.db.postgresql.PostgreSQLConnectionBuilder
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.junit.jupiter.api.TestInstance
+import org.junit.jupiter.api.parallel.Execution
+import org.junit.jupiter.api.parallel.ExecutionMode
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 
+@TestInstance(TestInstance.Lifecycle.PER_CLASS) // needed so we can have @BeforeAll on non static functions
+@Execution(ExecutionMode.CONCURRENT)
 open class DbTest {
 
     fun coRun(timeout: Duration = 1.minutes, block: suspend () -> Unit) {

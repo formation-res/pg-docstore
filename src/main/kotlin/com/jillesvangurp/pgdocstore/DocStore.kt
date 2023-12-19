@@ -1,20 +1,40 @@
 package com.jillesvangurp.pgdocstore
 
+import com.github.jasync.sql.db.QueryResult
 import com.github.jasync.sql.db.SuspendingConnection
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
+import kotlin.random.Random
+import kotlin.random.nextULong
+import kotlin.reflect.KProperty
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
-class DocStore<T>(
+class DocStore<T : Any>(
     val connection: SuspendingConnection,
     val serializationStrategy: KSerializer<T>,
+    val tableName: String,
     val json: Json = DEFAULT_JSON,
-    val tagExtractor : (T)-> List<String> = { listOf() }
-) {
+    val tagExtractor: (T) -> List<String> = { listOf() },
+    val idExtractor: (T) -> String = { d ->
+        val p = d::class.members.find { it.name == "id" } as KProperty<*>?
+        p?.getter?.call(d)?.toString() ?: error("property id not found")
+    },
+
+    ) {
+
+    suspend fun create(
+        doc: T,
+        timestamp: Instant = Clock.System.now()
+    ) {
+        create(idExtractor.invoke(doc), doc, timestamp)
+    }
 
     suspend fun create(id: String, doc: T, timestamp: Instant = Clock.System.now()) {
         val txt = json.encodeToString(serializationStrategy, doc)
@@ -22,7 +42,7 @@ class DocStore<T>(
         connection.inTransaction { c ->
             c.sendPreparedStatement(
                 """
-                INSERT INTO docstore (id, created_at, updated_at, json, tags)
+                INSERT INTO $tableName (id, created_at, updated_at, json, tags)
                 VALUES (?,?,?,?,?)
             """.trimIndent(), listOf(id, timestamp, timestamp, txt, tags)
             )
@@ -32,7 +52,7 @@ class DocStore<T>(
     suspend fun getById(id: String): T? {
         return connection.sendPreparedStatement(
             """
-            select * from docstore where id = ?
+            select * from $tableName where id = ?
         """.trimIndent(), listOf(id)
         ).let {
             if (it.rows.isNotEmpty()) {
@@ -46,6 +66,13 @@ class DocStore<T>(
     }
 
     suspend fun update(
+        doc: T,
+        timestamp: Instant = Clock.System.now(),
+        updateFunction: (T) -> T
+    ) = update(idExtractor.invoke(doc), timestamp, updateFunction)
+
+
+    suspend fun update(
         id: String,
         timestamp: Instant = Clock.System.now(),
         updateFunction: (T) -> T
@@ -53,7 +80,7 @@ class DocStore<T>(
         val newValue = connection.inTransaction { c ->
             c.sendPreparedStatement(
                 """
-            select json from docstore where id = ?
+            select json from $tableName where id = ?
         """.trimIndent(), listOf(id)
             ).let {
                 if (it.rows.isNotEmpty()) {
@@ -66,7 +93,7 @@ class DocStore<T>(
                             val txt = json.encodeToString(serializationStrategy, updated)
                             c.sendPreparedStatement(
                                 """
-                                UPDATE docstore
+                                UPDATE $tableName
                                 SET 
                                     updated_at = ?,
                                     json= ?,
@@ -86,22 +113,66 @@ class DocStore<T>(
         return newValue
     }
 
+    suspend fun delete(
+        doc: T,
+    ) = delete(idExtractor.invoke(doc))
+
+
     suspend fun delete(id: String) {
         connection.sendPreparedStatement(
-            """DELETE FROM docstore WHERE id = ?""", listOf(id)
+            """DELETE FROM $tableName WHERE id = ?""", listOf(id)
         )
     }
 
-    suspend fun bulkInsert(flow: Flow<Pair<String, T>>, chunkSize: Int = 100, delayMillis: Duration = 1.seconds) {
+    suspend fun bulkInsert(
+        flow: Flow<T>,
+        chunkSize: Int = 100, delayMillis: Duration = 1.seconds
+    ) {
+        bulkInsertWithId(
+            flow = flow.map { d ->
+                idExtractor.invoke(d) to d
+            },
+            chunkSize = chunkSize,
+            delayMillis = delayMillis
+        )
+    }
+
+    suspend fun bulkInsert(
+        sequence: Sequence<T>,
+        chunkSize: Int = 100
+    ) {
+        bulkInsertWithId(
+            sequence = sequence.map { d ->
+                idExtractor.invoke(d) to d
+            },
+            chunkSize = chunkSize
+
+        )
+    }
+
+    suspend fun bulkInsert(
+        iterable: Iterable<T>,
+        chunkSize: Int = 100
+    ) {
+        bulkInsertWithId(
+            iterable = iterable.map { d ->
+                idExtractor.invoke(d) to d
+            },
+            chunkSize = chunkSize
+        )
+    }
+
+    suspend fun bulkInsertWithId(flow: Flow<Pair<String, T>>, chunkSize: Int = 100, delayMillis: Duration = 1.seconds) {
         flow.chunked(chunkSize = chunkSize, delayMillis = delayMillis).collect { chunk ->
             insertList(chunk)
         }
     }
-    suspend fun bulkInsert(iterable: Iterable<Pair<String,T>>, chunkSize: Int = 100) {
-        bulkInsert(iterable.asSequence(), chunkSize)
+
+    suspend fun bulkInsertWithId(iterable: Iterable<Pair<String, T>>, chunkSize: Int = 100) {
+        bulkInsertWithId(iterable.asSequence(), chunkSize)
     }
 
-    suspend fun bulkInsert(sequence: Sequence<Pair<String,T>>, chunkSize: Int = 100) {
+    suspend fun bulkInsertWithId(sequence: Sequence<Pair<String, T>>, chunkSize: Int = 100) {
         sequence.chunked(chunkSize).forEach { chunk ->
             insertList(chunk)
         }
@@ -110,7 +181,7 @@ class DocStore<T>(
     suspend fun insertList(chunk: List<Pair<String, T>>) {
         // Base SQL for INSERT
         val baseSql = """
-                    INSERT INTO docstore (id, json, tags, created_at, updated_at)
+                    INSERT INTO $tableName (id, json, tags, created_at, updated_at)
                     VALUES 
                 """.trimIndent()
 
@@ -139,8 +210,38 @@ class DocStore<T>(
     }
 
     suspend fun count(): Long {
-        return connection.sendQuery("SELECT count(id) FROM docstore").let {
+        return connection.sendQuery("SELECT count(id) FROM $tableName").let {
             it.rows.first()[0]!! as Long
+        }
+    }
+
+    suspend fun queryFlow(query: String, params: List<Any>) : Flow<T> {
+        // use channelFlow for thread safety
+        return channelFlow {
+            val producer = this
+            connection.inTransaction {c ->
+                val cursorId = "cursor_${Random.nextULong()}"
+                try {
+                    c.sendPreparedStatement(
+                        """
+                            DECLARE $cursorId CURSOR FOR 
+                            $query
+                        """.trimIndent(), params
+                    )
+
+                    var resp: QueryResult? = null
+                    while (resp == null || resp.rows.isNotEmpty()) {
+                        resp = c.sendQuery("FETCH 100 FROM $cursorId;")
+                        resp.rows.forEach { row ->
+                            val doc = json.decodeFromString(serializationStrategy,row.getString("json")?: error("empty json"))
+                            producer.send(doc)
+                        }
+                    }
+
+                } finally {
+                    c.sendQuery("CLOSE $cursorId;")
+                }
+            }
         }
     }
 }
