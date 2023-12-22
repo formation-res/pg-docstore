@@ -57,46 +57,46 @@ fun <T> Flow<T>.chunked(
                     else
                         emptyFlow()
                 }
-        )
-            .collect { element ->
-                when (element) {
-                    Done -> {
-                        // we're done, emit remaining elements
-                        if (buffer.isNotEmpty()) {
-                            emit(buffer)
-                            buffer = mutableListOf()
-                        }
-
-                        // stop the timer flow
-                        timerToggleFlow.emit(null)
+        ).collect { element ->
+            when (element) {
+                Done -> {
+                    // we're done, emit remaining elements
+                    if (buffer.isNotEmpty()) {
+                        emit(buffer)
+                        buffer = mutableListOf()
                     }
 
-                    TimerExpired -> {
-                        // we've waited for the specified time
-                        // emit whatever is in the buffer
-                        if (buffer.isNotEmpty()) {
-                            emit(buffer)
-                            buffer = mutableListOf()
-                        }
+                    // stop the timer flow
+                    timerToggleFlow.emit(null)
+                }
+
+                TimerExpired -> {
+                    // we've waited for the specified time
+                    // emit whatever is in the buffer
+                    if (buffer.isNotEmpty()) {
+                        emit(buffer)
+                        buffer = mutableListOf()
+                        timerToggleFlow.emit(false)
                     }
+                }
 
-                    else -> {
-                        // the element is from upstream, add it to the buffer
-                        @Suppress("UNCHECKED_CAST")
-                        buffer.add(element as T)
+                else -> {
+                    // the element is from upstream, add it to the buffer
+                    @Suppress("UNCHECKED_CAST")
+                    buffer.add(element as T)
 
-                        // if our buffer is large enough, emit a chunk
-                        if (buffer.size >= chunkSize) {
-                            emit(buffer)
-                            buffer = mutableListOf()
-                            // stop the timer until we receive more elements
-                            timerToggleFlow.emit(false)
-                        } else if (buffer.size == 1) {
-                            // wait for more elements
-                            timerToggleFlow.emit(true)
-                        }
+                    // if our buffer is large enough, emit a chunk
+                    if (buffer.size >= chunkSize) {
+                        emit(buffer)
+                        buffer = mutableListOf()
+                        // stop the timer until we receive more elements
+                        timerToggleFlow.emit(false)
+                    } else if (buffer.size == 1) {
+                        // wait for more elements
+                        timerToggleFlow.emit(true)
                     }
                 }
             }
+        }
     }
 }
