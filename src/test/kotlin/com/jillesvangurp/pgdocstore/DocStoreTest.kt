@@ -5,12 +5,6 @@ import kotlinx.serialization.Serializable
 import org.junit.jupiter.api.Test
 import java.util.*
 
-@Serializable
-data class TestModel(val property: String)
-
-@Serializable
-data class TestModelWithId(val property: String, val id: String = UUID.randomUUID().toString())
-
 
 class DocStoreTest : DbTestBase() {
 

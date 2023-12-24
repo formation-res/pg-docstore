@@ -22,13 +22,29 @@ class DocStore<T : Any>(
     private val tableName: String,
     private val json: Json = DEFAULT_JSON,
     private val tagExtractor: (T) -> List<String> = { listOf() },
-    private val textExtractor: (T) -> String? = {""},
+    private val textExtractor: (T) -> String? = { "" },
     private val idExtractor: (T) -> String = { d ->
         val p = d::class.members.find { it.name == "id" } as KProperty<*>?
         p?.getter?.call(d)?.toString() ?: error("property id not found")
     },
 
     ) {
+
+    /**
+     * If you want to do multiple docstore operations in a transaction, call transact.
+     *
+     * It creates a new DocStore with a connection from jasync's inTransaction function that
+     * does the appropriate things to ensure transactions don't overlap.
+     *
+     * Note, jasync and transactions are tricky because you cannot assume the connection from a thread pool is not
+     * shared between threads. That's why inTransaction gives you a new connection that isn't shared for the duration
+     * of the transaction. This function in turn uses that to give you a DocStore instance that uses that connection.
+     */
+    suspend fun <R> transact(block: suspend (DocStore<T>) -> R): R {
+        return connection.inTransaction { c ->
+            block.invoke(DocStore(c,serializationStrategy,tableName,json,tagExtractor,textExtractor,idExtractor))
+        }
+    }
 
     suspend fun create(
         doc: T,
@@ -205,7 +221,7 @@ class DocStore<T : Any>(
             val now = Clock.System.now()
             val tags = tagExtractor.invoke(doc)
             val text = textExtractor.invoke(doc)
-            listOf(id, json.encodeToString(serializationStrategy, doc), tags, now, now,text)
+            listOf(id, json.encodeToString(serializationStrategy, doc), tags, now, now, text)
         }.flatten()
 
         // Create and execute the PreparedStatement
@@ -225,13 +241,18 @@ class DocStore<T : Any>(
         }
     }
 
-    suspend fun documentsByRecency(tags: List<String> = emptyList(), orTags: Boolean=false, query:String?=null): Flow<T> {
-        val whereClause = if(tags.isEmpty() && query.isNullOrBlank()) {
+    suspend fun documentsByRecency(
+        tags: List<String> = emptyList(),
+        orTags: Boolean = false,
+        query: String? = null
+    ): Flow<T> {
+        val whereClause = if (tags.isEmpty() && query.isNullOrBlank()) {
             ""
         } else {
 
             "WHERE " + listOfNotNull(
-                tags.takeIf { it.isNotEmpty() }?.let { tags.joinToString(if (orTags) " OR " else " AND ") { "? = ANY(tags)" } },
+                tags.takeIf { it.isNotEmpty() }
+                    ?.let { tags.joinToString(if (orTags) " OR " else " AND ") { "? = ANY(tags)" } },
                 query?.takeIf { it.isNotBlank() }?.let {
                     """text @@ websearch_to_tsquery('english',?)"""
 //                    null
@@ -263,7 +284,10 @@ class DocStore<T : Any>(
                         resp = c.sendQuery("FETCH $fetchSize FROM $cursorId;")
                         resp.rows.forEach { row ->
                             val doc =
-                                json.decodeFromString(serializationStrategy, row.getString("json") ?: error("empty json"))
+                                json.decodeFromString(
+                                    serializationStrategy,
+                                    row.getString("json") ?: error("empty json")
+                                )
                             producer.send(doc)
                         }
                     }
