@@ -101,6 +101,9 @@ val readmeMd = sourceGitRepository.md {
             store.getById(doc1.id)?.let {
                 println("Retrieved ${it.title}")
             }
+            // delete it
+            store.delete(doc1)
+            println("now it's gone: ${store.getById(doc1.id)}")
 
             // you can also do bulk inserts using flows or lists
             flow {
@@ -144,10 +147,11 @@ val readmeMd = sourceGitRepository.md {
                 }"
             )
 
-            // or search on the extracted tag
+            store.create(MyModel("The quick brown fox"))
+            // or search on the extracted text
             println(
-                "Found for 'first': ${
-                    store.documentsByRecency(query = "first").first().title
+                "Found for 'fox': ${
+                    store.documentsByRecency(query = "fox").first().title
                 }"
             )
 

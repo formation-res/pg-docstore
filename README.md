@@ -88,6 +88,9 @@ store.update(doc1) {
 store.getById(doc1.id)?.let {
   println("Retrieved ${it.title}")
 }
+// delete it
+store.delete(doc1)
+println("now it's gone ${store.getById(doc1.id)}")
 
 // you can also do bulk inserts using flows or lists
 flow {
@@ -131,10 +134,11 @@ println(
   }"
 )
 
-// or search on the extracted tag
+store.create(MyModel("The quick brown fox"))
+// or search on the extracted text
 println(
-  "Found for 'first': ${
-    store.documentsByRecency(query = "first").first().title
+  "Found for 'fox': ${
+    store.documentsByRecency(query = "fox").first().title
   }"
 )
 
@@ -201,10 +205,11 @@ Captured Output:
 ```
 Retrieved Number 1
 Retrieved Numero Uno
+now it's gone null
 five most recent documents: [Bulk 199, Bulk 198, Bulk 197, Bulk 196, Bulk 195]
-Total documents: 201
+Total documents: 200
 Just the bulk tagged documents: 200
-Found for 'first': Numero Uno
+Found for 'fox': The quick brown fox
 Count query total: 201
 Both docs exist: 2
 in the transaction it exists as: Modified
