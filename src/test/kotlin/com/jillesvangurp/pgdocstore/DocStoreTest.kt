@@ -1,9 +1,8 @@
 package com.jillesvangurp.pgdocstore
 
 import io.kotest.matchers.shouldBe
-import kotlinx.serialization.Serializable
+import io.kotest.matchers.shouldNotBe
 import org.junit.jupiter.api.Test
-import java.util.*
 
 
 class DocStoreTest : DbTestBase() {
@@ -39,5 +38,17 @@ class DocStoreTest : DbTestBase() {
         ds.getById(doc.id)?.property shouldBe "bar"
         ds.delete(doc)
         ds.getById(doc.id) shouldBe null
+    }
+
+    @Test
+    fun `update should change timestamp`() = coRun {
+        val ds = DocStore(db, TestModelWithId.serializer(), tableName)
+        val doc = TestModelWithId("foo")
+        ds.create(doc)
+        val ts1 = ds.getEntryById(doc.id)!!.updatedAt
+        ds.update(doc) {
+            it.copy(property = "bar")
+        }
+        ds.getEntryById(doc.id)!!.updatedAt shouldNotBe ts1
     }
 }
