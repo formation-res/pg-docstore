@@ -1,12 +1,16 @@
+import com.avast.gradle.dockercompose.ComposeExtension
 import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.gradle.api.tasks.testing.logging.TestLogEvent
 import org.jetbrains.dokka.gradle.DokkaTask
+import java.net.ConnectException
+import java.net.URI
 import kotlin.math.max
 
 plugins {
     kotlin("jvm")
     kotlin("plugin.serialization")
     id("org.jetbrains.dokka")
+    id("com.avast.gradle.docker-compose")
 }
 
 repositories {
@@ -30,12 +34,37 @@ dependencies {
     testImplementation("org.slf4j:jul-to-slf4j:_")
     testImplementation("org.apache.logging.log4j:log4j-to-slf4j:_") // es seems to insist on log4j2
     testImplementation("ch.qos.logback:logback-classic:_")
-
-
 }
+
+configure<ComposeExtension> {
+    buildAdditionalArgs = listOf("--force-rm")
+    stopContainers = true
+    removeContainers = true
+    useComposeFiles = listOf("docker-compose.yml")
+    setProjectName("pg-docstore")
+}
+
 
 tasks.withType<Test> {
     failFast = false
+    notCompatibleWithConfigurationCache("db isUp check is not compatible")
+
+    val isUp = try {
+        URI.create("http://localhost:5432").toURL().openConnection().connect()
+        true
+    } catch(e: ConnectException) {
+        project.logger.lifecycle("CONNECTION REFUSED ${e::class.simpleName} ${e.message}")
+        e.message != "Connection refused"
+    }
+
+    if(!isUp) {
+        project.logger.lifecycle("Compose hooks")
+        // if it's already running just use the existing instance
+        dependsOn("composeUp")
+        finalizedBy("composeDown")
+    } else {
+        project.logger.lifecycle("DB is already running, no compose hooks")
+    }
 
     useJUnitPlatform {
 
