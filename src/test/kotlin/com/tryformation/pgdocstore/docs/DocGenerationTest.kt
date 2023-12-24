@@ -7,6 +7,7 @@ import com.github.jasync.sql.db.postgresql.PostgreSQLConnectionBuilder
 import com.jillesvangurp.kotlin4example.SourceRepository
 import com.tryformation.pgdocstore.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.count
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.Serializable
@@ -15,6 +16,7 @@ import java.io.File
 import java.util.*
 import kotlin.random.Random
 import kotlin.random.nextULong
+import kotlin.time.Duration.Companion.milliseconds
 
 const val githubLink = "https://github.com/formation-res/pg-docstore"
 
@@ -60,7 +62,7 @@ val readmeMd = sourceGitRepository.md {
             @Serializable
             data class MyModel(
                 val title: String,
-                val description: String,
+                val description: String? = null,
                 val categories: List<String> = listOf(),
                 val id: String = UUID.randomUUID().toString(),
             )
@@ -82,7 +84,7 @@ val readmeMd = sourceGitRepository.md {
             )
 
             // do some crud
-            val doc1 = MyModel("Number 1", "a document", categories = listOf("foo"))
+            val doc1 = MyModel("Number 1", "a first document", categories = listOf("foo"))
             store.create(doc1)
             store.getById(doc1.id)?.let {
                 println("Retrieved ${it.title}")
@@ -110,32 +112,102 @@ val readmeMd = sourceGitRepository.md {
                             categories = listOf("bulk")
                         )
                     )
+                    // ensure the documents don't have the same timestamp
+                    delay(1.milliseconds)
                 }
             }.let { f ->
                 // bulk insert 40 at a time
                 store.bulkInsert(flow = f, chunkSize = 40)
             }
 
-
-            // and of course we can query
-            println( store.documentsByRecency(limit = 5).map { it.title })
-            // or we can scroll through the entire table
-            // and count the number of documents in the flow
-            println("Total documents: ${
-                store.documentsByRecencyScrolling().count()
+            // and of course we can query in all sorts of ways
+            println("five most recent documents: ${
+                store.documentsByRecency(limit = 5).map { it.title }
             }")
+            // we can scroll through the entire table
+            // and count the number of documents in the flow
+            println(
+                "Total documents: ${
+                    store.documentsByRecencyScrolling().count()
+                }"
+            )
 
             // and we can restrict the search using tags
-            println("Just the bulk documents: ${
-                store
-                    .documentsByRecencyScrolling(
-                        tags = listOf("bulk")
+            println(
+                "Just the bulk tagged documents: ${
+                    store
+                        .documentsByRecencyScrolling(
+                            // filters on the extracted tags
+                            tags = listOf("bulk")
+                        )
+                        .count()
+                }"
+            )
+
+            // or search on the extracted tag
+            println(
+                "Found for 'first': ${
+                    store.documentsByRecency(query = "first").first().title
+                }"
+            )
+
+            // if you like sql, just use the connection
+            store.connection
+                .sendQuery("SELECT COUNT(*) as total FROM docs")
+                .let { res ->
+                    res.rows.first().let { row ->
+                        println("Count query total: ${row["total"]}")
+                    }
+                }
+
+            // the whole point of dbs is transactions
+            store.transact { tStore ->
+                // everything you do with tStore is
+                // one big transaction
+                tStore.create(
+                    MyModel(
+                        title = "One more",
+                        categories = listOf("transaction1")
                     )
-                    .count()
-            }")
+                )
+                tStore.create(
+                    MyModel(
+                        title = "And this one too",
+                        categories = listOf("transaction1")
+                    )
+                )
+            }
+            println(
+                "Both docs exist: ${
+                    store.documentsByRecency(tags = listOf("transaction1")).count()
+                }"
+            )
+
+            // rollbacks happen if there are exceptions
+            val another = MyModel(
+                title = "Another",
+                description = "yet another document",
+                categories = listOf("foo")
+            )
+            runCatching {
+                store.transact { tStore ->
+                    tStore.create(another)
+                    tStore.update(another) {
+                        another.copy(title = "Modified")
+                    }
+                    println(
+                        "in the transaction it exists as: ${
+                            tStore.getById(another.id)?.title
+                        }"
+                    )
+                    // simulate an error
+                    // causes a rollback and rethrows
+                    error("oopsie")
+                }
+            }
+            // prints null because the transaction was rolled back
+            println("after the rollback ${store.getById(another.id)?.title}")
         }
-
-
     }
 
     includeMdFile("outro.md")
