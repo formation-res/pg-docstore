@@ -107,7 +107,6 @@ class DocStore<T : Any>(
                 VALUES (?,?,?,?,?,to_tsvector(coalesce(?)))
             """.trimIndent(), listOf(id, timestamp, timestamp, txt, tags, text)
         )
-
     }
 
     suspend fun getById(id: String): T? {
@@ -409,6 +408,10 @@ class DocStore<T : Any>(
                 }
             }
         }
+    }
+
+    suspend fun reExtract() {
+        bulkInsert(documentsByRecencyScrolling())
     }
 }
 

@@ -2,11 +2,11 @@ package com.tryformation.pgdocstore.docs
 
 import com.github.jasync.sql.db.ConnectionPoolConfiguration
 import com.github.jasync.sql.db.asSuspending
-import com.github.jasync.sql.db.interceptor.LoggingInterceptorSupplier
 import com.github.jasync.sql.db.postgresql.PostgreSQLConnectionBuilder
 import com.jillesvangurp.kotlin4example.SourceRepository
-import com.tryformation.pgdocstore.*
-import kotlinx.coroutines.Dispatchers
+import com.tryformation.pgdocstore.DocStore
+import com.tryformation.pgdocstore.db
+import com.tryformation.pgdocstore.reCreateDocStoreSchema
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.count
 import kotlinx.coroutines.flow.flow
@@ -14,8 +14,6 @@ import kotlinx.serialization.Serializable
 import org.junit.jupiter.api.Test
 import java.io.File
 import java.util.*
-import kotlin.random.Random
-import kotlin.random.nextULong
 import kotlin.time.Duration.Companion.milliseconds
 
 const val githubLink = "https://github.com/formation-res/pg-docstore"
@@ -101,9 +99,6 @@ val readmeMd = sourceGitRepository.md {
             store.getById(doc1.id)?.let {
                 println("Retrieved ${it.title}")
             }
-            // delete it
-            store.delete(doc1)
-            println("now it's gone: ${store.getById(doc1.id)}")
 
             // you can also do bulk inserts using flows or lists
             flow {
@@ -147,6 +142,11 @@ val readmeMd = sourceGitRepository.md {
                 }"
             )
 
+            // delete a document
+            store.delete(doc1)
+            println("now it's gone: ${store.getById(doc1.id)}")
+
+
             store.create(MyModel("The quick brown fox"))
             // or search on the extracted text
             println(
@@ -154,15 +154,6 @@ val readmeMd = sourceGitRepository.md {
                     store.documentsByRecency(query = "fox").first().title
                 }"
             )
-
-            // if you like sql, just use the connection
-            store.connection
-                .sendQuery("SELECT COUNT(*) as total FROM docs")
-                .let { res ->
-                    res.rows.first().let { row ->
-                        println("Count query total: ${row["total"]}")
-                    }
-                }
 
             // the whole point of dbs is transactions
             store.transact { tStore ->
@@ -211,8 +202,23 @@ val readmeMd = sourceGitRepository.md {
             }
             // prints null because the transaction was rolled back
             println("after the rollback ${store.getById(another.id)?.title}")
+
+            // if you like sql, just use the connection
+            store.connection
+                .sendQuery("SELECT COUNT(*) as total FROM docs")
+                .let { res ->
+                    res.rows.first().let { row ->
+                        println("Count query total: ${row["total"]}")
+                    }
+                }
+
         }
     }
+    +"""
+        This shows off most of the features. And more importantly, it shows how 
+        simple interactions with the database are. Mostly, it's just simple idiomatic Kotlin; nice
+        little one liners.
+    """.trimIndent()
 
     includeMdFile("outro.md")
 

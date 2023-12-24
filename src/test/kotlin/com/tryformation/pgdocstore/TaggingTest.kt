@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Test
 import java.util.UUID
 
 @Serializable
-data class TaggedModel(val title: String, val tags: List<String>, val id:String = UUID.randomUUID().toString())
+data class TaggedModel(val title: String, val tags: List<String> = listOf(), val id:String = UUID.randomUUID().toString())
 
 class TaggingTest : DbTestBase() {
     @Test
