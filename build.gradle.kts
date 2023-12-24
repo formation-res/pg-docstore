@@ -15,6 +15,12 @@ plugins {
 
 repositories {
     mavenCentral()
+    maven(url = "https://jitpack.io") {
+        content {
+            includeGroup("com.github.jillesvangurp")
+        }
+    }
+
 }
 
 dependencies {
@@ -34,6 +40,7 @@ dependencies {
     testImplementation("org.slf4j:jul-to-slf4j:_")
     testImplementation("org.apache.logging.log4j:log4j-to-slf4j:_") // es seems to insist on log4j2
     testImplementation("ch.qos.logback:logback-classic:_")
+    testImplementation("com.github.jillesvangurp:kotlin4example:_")
 }
 
 configure<ComposeExtension> {
