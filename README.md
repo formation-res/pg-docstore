@@ -90,7 +90,7 @@ store.getById(doc1.id)?.let {
 }
 // delete it
 store.delete(doc1)
-println("now it's gone ${store.getById(doc1.id)}")
+println("now it's gone: ${store.getById(doc1.id)}")
 
 // you can also do bulk inserts using flows or lists
 flow {
@@ -205,7 +205,7 @@ Captured Output:
 ```
 Retrieved Number 1
 Retrieved Numero Uno
-now it's gone null
+now it's gone: null
 five most recent documents: [Bulk 199, Bulk 198, Bulk 197, Bulk 196, Bulk 195]
 Total documents: 200
 Just the bulk tagged documents: 200
