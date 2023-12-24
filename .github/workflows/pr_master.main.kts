@@ -14,6 +14,7 @@ import io.github.typesafegithub.workflows.actions.googlegithubactions.SetupGclou
 import io.github.typesafegithub.workflows.actions.gradle.GradleBuildActionV2
 import io.github.typesafegithub.workflows.domain.RunnerType
 import io.github.typesafegithub.workflows.domain.triggers.PullRequest
+import io.github.typesafegithub.workflows.domain.triggers.Push
 import io.github.typesafegithub.workflows.dsl.expressions.expr
 import io.github.typesafegithub.workflows.dsl.workflow
 import io.github.typesafegithub.workflows.yaml.writeToFile
@@ -21,6 +22,9 @@ import io.github.typesafegithub.workflows.yaml.writeToFile
 val workflow = workflow(
     name = "Process Pull Request",
     on = listOf(
+        Push(
+            branches = listOf("master")
+        ),
         PullRequest(
             branches = listOf("master")
         ),
