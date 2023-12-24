@@ -6,10 +6,10 @@ name: 'Process Pull Request'
 on:
   push:
     branches:
-    - 'master'
+    - 'main'
   pull_request:
     branches:
-    - 'master'
+    - 'main'
 jobs:
   check_yaml_consistency:
     name: 'Check YAML consistency'

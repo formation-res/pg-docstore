@@ -23,10 +23,10 @@ val workflow = workflow(
     name = "Process Pull Request",
     on = listOf(
         Push(
-            branches = listOf("master")
+            branches = listOf("main")
         ),
         PullRequest(
-            branches = listOf("master")
+            branches = listOf("main")
         ),
     ),
     sourceFile = __FILE__.toPath(),
