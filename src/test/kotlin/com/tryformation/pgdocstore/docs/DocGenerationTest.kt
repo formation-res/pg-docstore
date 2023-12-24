@@ -102,11 +102,11 @@ val readmeMd = sourceGitRepository.md {
 
             // you can also do bulk inserts using flows or lists
             flow {
-                repeat(200) {
+                repeat(200) { index ->
                     emit(
                         MyModel(
-                            title = "Bulk $1",
-                            description = "A bulk inserted doc",
+                            title = "Bulk $index",
+                            description = "A bulk inserted doc #$index",
                             categories = listOf("bulk")
                         )
                     )

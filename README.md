@@ -91,11 +91,11 @@ store.getById(doc1.id)?.let {
 
 // you can also do bulk inserts using flows or lists
 flow {
-  repeat(200) {
+  repeat(200) { index ->
     emit(
       MyModel(
-        title = "Bulk $1",
-        description = "A bulk inserted doc",
+        title = "Bulk $index",
+        description = "A bulk inserted doc #$index",
         categories = listOf("bulk")
       )
     )
@@ -129,7 +129,7 @@ Captured Output:
 ```
 Retrieved Number 1
 Retrieved Numero Uno
-[Bulk $1, Bulk $1, Bulk $1, Bulk $1, Bulk $1]
+[Bulk 199, Bulk 198, Bulk 197, Bulk 196, Bulk 195]
 Total documents: 201
 Just the bulk documents: 200
 
