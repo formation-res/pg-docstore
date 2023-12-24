@@ -1,4 +1,4 @@
-package com.jillesvangurp.pgdocstore
+package com.tryformation.pgdocstore
 
 import com.github.jasync.sql.db.ConnectionPoolConfiguration
 import com.github.jasync.sql.db.SuspendingConnection

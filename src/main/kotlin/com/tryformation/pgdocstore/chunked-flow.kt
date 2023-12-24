@@ -1,4 +1,4 @@
-package com.jillesvangurp.pgdocstore
+package com.tryformation.pgdocstore
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay

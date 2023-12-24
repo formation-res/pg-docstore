@@ -1,6 +1,6 @@
 @file:Suppress("unused", "MemberVisibilityCanBePrivate")
 
-package com.jillesvangurp.pgdocstore
+package com.tryformation.pgdocstore
 
 import com.github.jasync.sql.db.QueryResult
 import com.github.jasync.sql.db.RowData

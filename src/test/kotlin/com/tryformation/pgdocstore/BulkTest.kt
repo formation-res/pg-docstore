@@ -1,4 +1,4 @@
-package com.jillesvangurp.pgdocstore
+package com.tryformation.pgdocstore
 
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.flow.count
