@@ -30,8 +30,13 @@ and that uses non blocking IO.
 
 ## Usage
 
+### Connecting to the database
+
+Pg-docstore uses jasync-postgresql to connect to Postgresql. Unlike many other
+database frameworks, this framework uses non blocking IO and is co-routine friendly;
+and largely written in Kotlin too. This makes it a perfect choice for pg-docstore.
+
 ```kotlin
-// jasync suspending connection
 val connection = PostgreSQLConnectionBuilder
   .createConnectionPool(
     ConnectionPoolConfiguration(
@@ -44,8 +49,17 @@ val connection = PostgreSQLConnectionBuilder
   ).asSuspending
 
 // recreate the docs table
-db.reCreateDocStoreSchema("docs")
+connection.reCreateDocStoreSchema("docs")
+```
 
+The `reCreateDocStoreSchema` call applies the docstore table schema to a docs table and re-creates that.
+
+### Creating a store
+
+We'll use the following simple data class as our model. It's annotated with `@Serializable`. This enables
+model serialization using kotlinx.serialization.
+
+```kotlin
 @Serializable
 data class MyModel(
   val title: String,
@@ -53,8 +67,11 @@ data class MyModel(
   val categories: List<String> = listOf(),
   val id: String = UUID.randomUUID().toString(),
 )
+```
 
-// create a store for the docs table
+Using this data class, we can now create a store.
+
+```kotlin
 val store = DocStore(
   connection = connection,
   serializationStrategy = MyModel.serializer(),
@@ -69,6 +86,23 @@ val store = DocStore(
     it.categories
   }
 )
+```
+
+The call includes three optional arguments. The optional `idExtractor` extracts an id from your model,
+the default implementation simply looks for an `id` property by name but using a property reference is 
+slightly more efficient.
+
+To facilitate querying by plain text (using the text search facilities in postgresql) or tags, 
+there are the textExtractor and tagExtractor fields. This allows you to search across your 
+models without requiring a lot of knowledge about the internal structure of the json. The default 
+implementations simply return `null`. 
+
+In the example, we simply concatenate the title and description to enable text search and we use the 
+content of the categories field to enable tag search.
+
+### Create, read, update, and delete (CRUD) and querying
+
+```kotlin
 
 // do some crud
 val doc1 = MyModel("Number 1", "a first document", categories = listOf("foo"))
@@ -88,9 +122,6 @@ store.update(doc1) {
 store.getById(doc1.id)?.let {
   println("Retrieved ${it.title}")
 }
-// delete it
-store.delete(doc1)
-println("now it's gone: ${store.getById(doc1.id)}")
 
 // you can also do bulk inserts using flows or lists
 flow {
@@ -134,6 +165,27 @@ println(
   }"
 )
 
+// delete a document
+store.delete(doc1)
+println("now it's gone: ${store.getById(doc1.id)}")
+```
+
+Captured Output:
+
+```
+Retrieved Number 1
+Retrieved Numero Uno
+five most recent documents: [Bulk 199, Bulk 198, Bulk 197, Bulk 196, Bulk 195]
+Total documents: 201
+Just the bulk tagged documents: 200
+now it's gone: null
+
+```
+
+### Text search
+
+```kotlin
+
 store.create(MyModel("The quick brown fox"))
 // or search on the extracted text
 println(
@@ -141,17 +193,26 @@ println(
     store.documentsByRecency(query = "fox").first().title
   }"
 )
+```
 
-// if you like sql, just use the connection
-store.connection
-  .sendQuery("SELECT COUNT(*) as total FROM docs")
-  .let { res ->
-    res.rows.first().let { row ->
-      println("Count query total: ${row["total"]}")
-    }
-  }
+Captured Output:
 
-// the whole point of dbs is transactions
+```
+Found for 'fox': The quick brown fox
+
+```
+
+### Transactions
+
+Most operations in the docstore are single sql statements and don't require a transaction.
+
+But of course we are using a proper database here and you can group operations in a transaction. 
+The `transact` function creates a new docstore with it's own isolated connection that is used for the duration of 
+the transaction. This ensures that it succeeds or rolls back as a whole and prevents other threads 
+from sending sql commands on the same connection. We need this because connections are shared and queries
+are non blocking.
+
+```kotlin
 store.transact { tStore ->
   // everything you do with tStore is
   // one big transaction
@@ -171,8 +232,20 @@ store.transact { tStore ->
 println(
   "Both docs exist: ${
     store.documentsByRecency(tags = listOf("transaction1")).count()
-  }"
+  } after the transaction"
 )
+```
+
+Captured Output:
+
+```
+Both docs exist: 2 after the transaction
+
+```
+
+In case of an exception, there is a rollback.
+
+```kotlin
 
 // rollbacks happen if there are exceptions
 val another = MyModel(
@@ -203,29 +276,45 @@ println("after the rollback ${store.getById(another.id)?.title}")
 Captured Output:
 
 ```
-Retrieved Number 1
-Retrieved Numero Uno
-now it's gone: null
-five most recent documents: [Bulk 199, Bulk 198, Bulk 197, Bulk 196, Bulk 195]
-Total documents: 200
-Just the bulk tagged documents: 200
-Found for 'fox': The quick brown fox
-Count query total: 201
-Both docs exist: 2
 in the transaction it exists as: Modified
 after the rollback null
 
 ```
 
+```kotlin
+
+// if you like sql, just use the connection
+store.connection
+  .sendQuery("SELECT COUNT(*) as total FROM docs")
+  .let { res ->
+    res.rows.first().let { row ->
+      println("Count query total: ${row["total"]}")
+    }
+  }
+
+```
+
+Captured Output:
+
+```
+Count query total: 203
+
+```
+
+This shows off most of the features. And more importantly, it shows how 
+simple interactions with the database are. Mostly, it's just simple idiomatic Kotlin; nice
+little one liners.
+
 ## Future work
 
 As FORMATION grows, we will no doubt need more features. Some features that come to mind are sharding, utilizing some of
-the json features in postgres, or even it's text search and geospatial features.
+the json features in postgres, geospatial features, or other featutes.
 
 ## Development status
 
 This is a relatively new project; so there may be some bugs, design flaws, etc. However, I've implemented similar
-stores many times before in past projects and I think I know what I'm doing. If it works for us, it might also work for you.
+stores many times before in past projects and I think I know what I'm doing. If it works for us, it might also work 
+for you.
 
 Give it a try!
 
