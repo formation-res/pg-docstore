@@ -91,12 +91,13 @@ class DocStore<T : Any>(
 
     suspend fun create(
         doc: T,
-        timestamp: Instant = Clock.System.now()
+        timestamp: Instant = Clock.System.now(),
+        onConflictUpdate:Boolean=false
     ) {
-        create(idExtractor.invoke(doc), doc, timestamp)
+        create(idExtractor.invoke(doc), doc, timestamp,onConflictUpdate)
     }
 
-    suspend fun create(id: String, doc: T, timestamp: Instant = Clock.System.now()) {
+    suspend fun create(id: String, doc: T, timestamp: Instant = Clock.System.now(),onConflictUpdate:Boolean=false) {
         val txt = json.encodeToString(serializationStrategy, doc)
         val tags = tagExtractor.invoke(doc)
         val text = textExtractor.invoke(doc)
@@ -105,6 +106,16 @@ class DocStore<T : Any>(
             """
                 INSERT INTO $tableName (id, created_at, updated_at, json, tags, text)
                 VALUES (?,?,?,?,?,to_tsvector(coalesce(?)))
+                ${
+                    if(onConflictUpdate) """
+                        ON CONFLICT (id) DO UPDATE SET
+                            json = EXCLUDED.json,
+                            tags = EXCLUDED.tags,                   
+                            text = EXCLUDED.text,                                     
+                            updated_at = EXCLUDED.updated_at
+                    """.trimIndent()
+                    else ""
+                }
             """.trimIndent(), listOf(id, timestamp, timestamp, txt, tags, text)
         )
     }
@@ -125,6 +136,23 @@ class DocStore<T : Any>(
         }
     }
 
+    suspend fun multiGetById(ids: List<String>): List<T> {
+
+        return connection.sendPreparedStatement(
+            // little hack with question marks because jasync doesn't handle lists in prepared statements
+            query = """
+                    select ${DocStoreEntry::json.name} from $tableName where id in (${ids.joinToString(",") { "?" }})
+                """.trimIndent(),
+            values = ids,
+            // release because number of question marks may vary ...
+            release = true
+        ).rows.mapNotNull { row ->
+            row.getString(DocStoreEntry::json.name)?.let { str ->
+                json.decodeFromString(serializationStrategy, str)
+            }
+        }
+    }
+
     suspend fun getEntryById(id: String): DocStoreEntry? {
         return connection.sendPreparedStatement(
             """
@@ -136,6 +164,22 @@ class DocStore<T : Any>(
                 it.rows.first().docStoreEntry
             } else {
                 null
+            }
+        }
+    }
+
+    suspend fun multiGetEntryById(ids: List<String>): List<DocStoreEntry> {
+        return connection.sendPreparedStatement(
+            // little hack with question marks because jasync doesn't handle lists in prepared statements
+            query = """
+                        select * from $tableName where id in (${ids.joinToString(",") { "?" }})
+                    """.trimIndent(),
+            values = ids,
+            // release because number of question marks may vary ...
+            release = true
+        ).let { r ->
+            r.rows.map {
+                it.docStoreEntry
             }
         }
     }
@@ -253,7 +297,7 @@ class DocStore<T : Any>(
         }
     }
 
-    suspend fun insertList(chunk: List<Pair<String, T>>) {
+    suspend fun insertList(chunk: List<Pair<String, T>>,timestamp: Instant = Clock.System.now()) {
         // Base SQL for INSERT
         val baseSql = """
                     INSERT INTO $tableName (id, json, tags, created_at, updated_at, text)
@@ -266,15 +310,15 @@ class DocStore<T : Any>(
                     ON CONFLICT (id) DO UPDATE SET
                     json = EXCLUDED.json,
                     tags = EXCLUDED.tags,                   
-                    text = EXCLUDED.text,                   
-                    updated_at = EXCLUDED.updated_at
-                """.trimIndent()
+                    text = EXCLUDED.text,                                     
+                    updated_at = EXCLUDED.created_at
+                """.trimIndent() // uses rejected created_at as the update timestamp
 
         val sql = "$baseSql $values $conflictAction"
 
         // Flatten the list of lists into a single list of parameters
         val params = chunk.map { (id, doc) ->
-            val now = Clock.System.now()
+            val now = timestamp
             val tags = tagExtractor.invoke(doc)
             val text = textExtractor.invoke(doc)
             listOf(id, json.encodeToString(serializationStrategy, doc), tags, now, now, text)
@@ -282,11 +326,7 @@ class DocStore<T : Any>(
 
         // Create and execute the PreparedStatement
 
-        try {
-            connection.sendPreparedStatement(sql, params)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        connection.sendPreparedStatement(sql, params)
     }
 
     suspend fun count(): Long {
@@ -330,9 +370,13 @@ class DocStore<T : Any>(
         tags: List<String> = emptyList(),
         orTags: Boolean = false,
         query: String? = null,
+        fetchSize: Int = 100,
     ): Flow<DocStoreEntry> {
-        val q = constructQuery(tags, query, orTags)
-        return queryFlow(q, tags + listOfNotNull(query)) { row ->
+        return queryFlow(
+            query = constructQuery(tags, query, orTags),
+            params = tags + listOfNotNull(query),
+            fetchSize = fetchSize
+        ) { row ->
             row.docStoreEntry
         }
     }
@@ -341,9 +385,14 @@ class DocStore<T : Any>(
         tags: List<String> = emptyList(),
         orTags: Boolean = false,
         query: String? = null,
+        fetchSize: Int = 100,
     ): Flow<T> {
         val q = constructQuery(tags, query, orTags)
-        return queryFlow(q, tags + listOfNotNull(query)) { row ->
+        return queryFlow(
+            query = q,
+            params = tags + listOfNotNull(query),
+            fetchSize = fetchSize
+        ) { row ->
             json.decodeFromString(
                 serializationStrategy,
                 row.getString(DocStoreEntry::json.name) ?: error("empty json")

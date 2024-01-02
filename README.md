@@ -107,21 +107,93 @@ content of the categories field to enable tag search.
 // do some crud
 val doc1 = MyModel("Number 1", "a first document", categories = listOf("foo"))
 store.create(doc1)
+
 store.getById(doc1.id)?.let {
   println("Retrieved ${it.title}")
 }
-// update by id
-store.update(doc1.id) {
-  it.copy(title = "Number One")
+
+// you can only create the same id once
+try {
+  store.create(doc1)
+} catch (e: GenericDatabaseException) {
+  // fails
+  println("id already exists")
 }
-// or just pass in the document
-store.update(doc1) {
-  it.copy(title = "Numero Uno")
-}
-// Retrieve it again
+
+// you can force the conflict be handled
+// by overwriting the original
+store.create(
+  doc1.copy(title = "Numero Uno"),
+  onConflictUpdate = true)
+
+// now it is changed
 store.getById(doc1.id)?.let {
-  println("Retrieved ${it.title}")
+  println("Changed title ${it.title}")
 }
+
+// This is a better way to do updates
+// update by id and modify the retrieved original
+store.update(doc1.id) { original ->
+  // modify the original
+  original.copy(title = "Number One")
+}
+
+// you can also do it like this
+store.update(doc1) { original ->
+  // still fetches the original
+  original.copy(title = "This is the one")
+}
+
+store.getById(doc1.id)?.let {
+  println("Now it is ${it.title}")
+}
+
+// delete a document
+store.delete(doc1)
+println("now it's gone: ${store.getById(doc1.id)}")
+
+```
+
+This prints:
+
+```text
+Retrieved Number 1
+id already exists
+Changed title Numero Uno
+Now it is This is the one
+now it's gone: null
+```
+
+### Multi-get
+
+You can get multiple documents in one go like this:
+
+```kotlin
+store.create(MyModel(id="1", title = "Foo"))
+store.create(MyModel(id="1", title = "Bar"))
+val docs =
+  store.multiGetById(listOf("1", "2"))
+println(docs.map { it.title })
+```
+
+This prints:
+
+```text
+
+```
+
+### Bulk inserting documents
+
+Inserting documents one at the time is not
+very efficient. If you have large amounts
+of documents, you should use bulkInsert.
+
+This works with lists or flows. If you use
+scrolling searches, which return a flow,
+you can efficiently update large amounts
+of documents in one go.
+
+```kotlin
 
 // you can also do bulk inserts using flows or lists
 flow {
@@ -140,48 +212,62 @@ flow {
   // bulk insert 40 at a time
   store.bulkInsert(flow = f, chunkSize = 40)
 }
+```
 
-// and of course we can query in all sorts of ways
+### Querying
+
+Querying is a bit limited in pg-docstore; it's meant to 
+be used in combination with things like opensearch or
+elasticsearch.
+
+However, there are a few ways in which you can get documents
+out of the store.
+
+```kotlin
+
+// documents are sorted by recency
 println("five most recent documents: ${
   store.documentsByRecency(limit = 5).map { it.title }
 }")
-// we can scroll through the entire table
+// we can also scroll through the entire table
 // and count the number of documents in the flow
 println(
   "Total documents: ${
-    store.documentsByRecencyScrolling().count()
+    // returns a Flow<T>
+    store.documentsByRecencyScrolling(
+      // fetch pages of 5 rows
+      fetchSize = 5
+    ).count()
   }"
 )
+// of course you can also do a select count(*) ...
+println(store.count())
 
-// and we can restrict the search using tags
+// The search can be restricted using tags
+// you need to set up the tagExtractor functino
+// in the DocStore params for this to work
 println(
   "Just the bulk tagged documents: ${
-    store
-      .documentsByRecencyScrolling(
-        // filters on the extracted tags
-        tags = listOf("bulk")
-      )
-      .count()
+    store.documentsByRecencyScrolling(
+      // filters on the extracted tags
+      tags = listOf("bulk")
+    ).count()
   }"
 )
 
-// delete a document
-store.delete(doc1)
-println("now it's gone: ${store.getById(doc1.id)}")
 ```
 
 This prints:
 
 ```text
-Retrieved Number 1
-Retrieved Numero Uno
 five most recent documents: [Bulk 199, Bulk 198, Bulk 197, Bulk 196, Bulk 195]
 Total documents: 201
+201
 Just the bulk tagged documents: 200
-now it's gone: null
 ```
 
-### Text search
+While no substitute for a proper search engine, postgres has some
+text search facilities.
 
 ```kotlin
 

@@ -7,4 +7,4 @@ import java.util.*
 data class TestModel(val property: String)
 
 @Serializable
-data class TestModelWithId(val property: String, val id: String = UUID.randomUUID().toString())
+data class TestModelWithId(val title: String, val id: String = UUID.randomUUID().toString())

@@ -18,7 +18,7 @@ class TransactTest : DbTestBase() {
                 dsT.getById(doc.id) shouldNotBe null
                 val doc2 = TestModelWithId("foobar", id = "idontexist")
                 dsT.update(doc2) {
-                    it.copy(property = "fail")
+                    it.copy(title = "fail")
                 }
             }
         }

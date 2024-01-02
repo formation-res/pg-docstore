@@ -27,9 +27,11 @@ class BulkTest : DbTestBase() {
         ds.entriesByRecency(limit = 33).size shouldBe 33
         ds.entriesByRecency(limit = 33).map { it.id }.distinct().size shouldBe 33
 
-        stored.map { it.copy(property = it.property.reversed()) }.let {
+        stored.map { it.copy(title = it.title.reversed()) }.let {
             ds.bulkInsert(it)
         }
         ds.count() shouldBe 200
+        ds.multiGetById(stored.map { it.id }.take(13)).size shouldBe 13
+        ds.multiGetEntryById(stored.map { it.id }.take(13)).size shouldBe 13
     }
 }
