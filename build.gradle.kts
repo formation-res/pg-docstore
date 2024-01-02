@@ -24,6 +24,11 @@ repositories {
 
 }
 
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
 dependencies {
     implementation(KotlinX.coroutines.jdk8)
     implementation(KotlinX.coroutines.slf4j)
@@ -52,11 +57,15 @@ configure<ComposeExtension> {
     setProjectName("pg-docstore")
 }
 
-configure<PublishingExtension> {
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            from(components["java"])
+        }
+    }
     repositories {
         maven {
-            // GOOGLE_APPLICATION_CREDENTIALS env var must be set for this to work
-            // public repository is at https://maven.tryformation.com/releases
+            // change to point to your repo, e.g. http://my.org/repo
             url = uri("gcs://mvn-public-tryformation/releases")
             name = "FormationPublic"
         }
