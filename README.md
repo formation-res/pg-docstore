@@ -170,16 +170,15 @@ store.delete(doc1)
 println("now it's gone: ${store.getById(doc1.id)}")
 ```
 
-Captured Output:
+This prints:
 
-```
+```text
 Retrieved Number 1
 Retrieved Numero Uno
 five most recent documents: [Bulk 199, Bulk 198, Bulk 197, Bulk 196, Bulk 195]
 Total documents: 201
 Just the bulk tagged documents: 200
 now it's gone: null
-
 ```
 
 ### Text search
@@ -195,22 +194,24 @@ println(
 )
 ```
 
-Captured Output:
+This prints:
 
-```
+```text
 Found for 'fox': The quick brown fox
-
 ```
 
 ### Transactions
 
-Most operations in the docstore are single sql statements and don't require a transaction.
+Most operations in the docstore are single sql statements and don't use a transaction. However,
+you can of course control this if you need to, e.g. modify multiple documents in one transaction.                
 
-But of course we are using a proper database here and you can group operations in a transaction. 
-The `transact` function creates a new docstore with it's own isolated connection that is used for the duration of 
-the transaction. This ensures that it succeeds or rolls back as a whole and prevents other threads 
-from sending sql commands on the same connection. We need this because connections are shared and queries
-are non blocking.
+The `transact` function creates a new docstore with it's own isolated connection and the same parameters 
+as its parent. The isolated connection is used for the duration of 
+the transaction and exclusive to your code block. This prevents other parts of your code from sending sql commands on the connection. 
+
+If you are used to blocking IO frameworks this may be a bit surprising. However, we need this 
+because connections in jasync are shared and queries are non blocking. Without using an isolated connection, 
+other parts of your code might run their own queries in your transaction, which of course is not desirable.
 
 ```kotlin
 store.transact { tStore ->
@@ -236,11 +237,10 @@ println(
 )
 ```
 
-Captured Output:
+This prints:
 
-```
+```text
 Both docs exist: 2 after the transaction
-
 ```
 
 In case of an exception, there is a rollback.
@@ -273,37 +273,12 @@ runCatching {
 println("after the rollback ${store.getById(another.id)?.title}")
 ```
 
-Captured Output:
+This prints:
 
-```
+```text
 in the transaction it exists as: Modified
 after the rollback null
-
 ```
-
-```kotlin
-
-// if you like sql, just use the connection
-store.connection
-  .sendQuery("SELECT COUNT(*) as total FROM docs")
-  .let { res ->
-    res.rows.first().let { row ->
-      println("Count query total: ${row["total"]}")
-    }
-  }
-
-```
-
-Captured Output:
-
-```
-Count query total: 203
-
-```
-
-This shows off most of the features. And more importantly, it shows how 
-simple interactions with the database are. Mostly, it's just simple idiomatic Kotlin; nice
-little one liners.
 
 ## Future work
 

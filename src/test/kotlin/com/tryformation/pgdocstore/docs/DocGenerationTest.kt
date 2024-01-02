@@ -1,3 +1,5 @@
+@file:Suppress("NAME_SHADOWING")
+
 package com.tryformation.pgdocstore.docs
 
 import com.github.jasync.sql.db.ConnectionPoolConfiguration
@@ -36,6 +38,7 @@ class DocGenerationTest {
     }
 }
 
+@Suppress("UNUSED_VARIABLE")
 val readmeMd = sourceGitRepository.md {
     includeMdFile("intro.md")
 
@@ -86,7 +89,7 @@ val readmeMd = sourceGitRepository.md {
                 and largely written in Kotlin too. This makes it a perfect choice for pg-docstore.
             """.trimIndent()
 
-            suspendingBlock {
+            example {
                 val connection = PostgreSQLConnectionBuilder
                     .createConnectionPool(
                         ConnectionPoolConfiguration(
@@ -112,7 +115,7 @@ val readmeMd = sourceGitRepository.md {
                 model serialization using kotlinx.serialization.
             """.trimIndent()
 
-            suspendingBlock {
+            example {
                 @Serializable
                 data class MyModel(
                     val title: String,
@@ -125,7 +128,7 @@ val readmeMd = sourceGitRepository.md {
             +"""
                 Using this data class, we can now create a store.
             """.trimIndent()
-            suspendingBlock {
+            example {
                 val store = DocStore(
                     connection = connection,
                     serializationStrategy = MyModel.serializer(),
@@ -157,7 +160,7 @@ val readmeMd = sourceGitRepository.md {
         }
 
         subSection("Create, read, update, and delete (CRUD) and querying") {
-            suspendingBlock {
+            example {
 
                 // do some crud
                 val doc1 = MyModel("Number 1", "a first document", categories = listOf("foo"))
@@ -223,10 +226,16 @@ val readmeMd = sourceGitRepository.md {
                 // delete a document
                 store.delete(doc1)
                 println("now it's gone: ${store.getById(doc1.id)}")
+            }.let {
+                +"""
+                    This prints:
+                """.trimIndent()
+                mdCodeBlock(it.stdOut,"text")
             }
+
         }
         subSection("Text search") {
-            suspendingBlock {
+            example {
 
                 store.create(MyModel("The quick brown fox"))
                 // or search on the extracted text
@@ -235,6 +244,11 @@ val readmeMd = sourceGitRepository.md {
                         store.documentsByRecency(query = "fox").first().title
                     }"
                 )
+            }.let {
+                +"""
+                    This prints:
+                """.trimIndent()
+                mdCodeBlock(it.stdOut,"text")
             }
         }
         subSection("Transactions") {
@@ -251,7 +265,7 @@ val readmeMd = sourceGitRepository.md {
                 other parts of your code might run their own queries in your transaction, which of course is not desirable.
             """.trimIndent()
 
-            suspendingBlock {
+            example {
                 store.transact { tStore ->
                     // everything you do with tStore is
                     // one big transaction
@@ -273,13 +287,18 @@ val readmeMd = sourceGitRepository.md {
                         store.documentsByRecency(tags = listOf("transaction1")).count()
                     } after the transaction"
                 )
+            }.let {
+                +"""
+                    This prints:
+                """.trimIndent()
+                mdCodeBlock(it.stdOut,"text")
             }
 
             +"""
                 In case of an exception, there is a rollback.
             """.trimIndent()
 
-            suspendingBlock {
+            example {
 
                 // rollbacks happen if there are exceptions
                 val another = MyModel(
@@ -305,27 +324,14 @@ val readmeMd = sourceGitRepository.md {
                 }
                 // prints null because the transaction was rolled back
                 println("after the rollback ${store.getById(another.id)?.title}")
+            }.let {
+                +"""
+                    This prints:
+                """.trimIndent()
+                mdCodeBlock(it.stdOut,"text")
             }
         }
-
-        suspendingBlock {
-
-            // if you like sql, just use the connection
-            store.connection
-                .sendQuery("SELECT COUNT(*) as total FROM docs")
-                .let { res ->
-                    res.rows.first().let { row ->
-                        println("Count query total: ${row["total"]}")
-                    }
-                }
-
-        }
     }
-    +"""
-        This shows off most of the features. And more importantly, it shows how 
-        simple interactions with the database are. Mostly, it's just simple idiomatic Kotlin; nice
-        little one liners.
-    """.trimIndent()
 
     includeMdFile("outro.md")
 
