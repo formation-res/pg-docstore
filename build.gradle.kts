@@ -11,6 +11,7 @@ plugins {
     kotlin("plugin.serialization")
     id("org.jetbrains.dokka")
     id("com.avast.gradle.docker-compose")
+    id("maven-publish")
 }
 
 repositories {
@@ -51,6 +52,16 @@ configure<ComposeExtension> {
     setProjectName("pg-docstore")
 }
 
+configure<PublishingExtension> {
+    repositories {
+        maven {
+            // GOOGLE_APPLICATION_CREDENTIALS env var must be set for this to work
+            // public repository is at https://maven.tryformation.com/releases
+            url = uri("gcs://mvn-public-tryformation/releases")
+            name = "FormationPublic"
+        }
+    }
+}
 
 tasks.withType<Test> {
     failFast = false
