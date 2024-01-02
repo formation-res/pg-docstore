@@ -5,7 +5,6 @@ import com.github.jasync.sql.db.asSuspending
 import com.github.jasync.sql.db.postgresql.PostgreSQLConnectionBuilder
 import com.jillesvangurp.kotlin4example.SourceRepository
 import com.tryformation.pgdocstore.DocStore
-import com.tryformation.pgdocstore.db
 import com.tryformation.pgdocstore.reCreateDocStoreSchema
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.count
@@ -240,13 +239,16 @@ val readmeMd = sourceGitRepository.md {
         }
         subSection("Transactions") {
             +"""
-                Most operations in the docstore are single sql statements and don't require a transaction.
+                Most operations in the docstore are single sql statements and don't use a transaction. However,
+                you can of course control this if you need to, e.g. modify multiple documents in one transaction.                
                 
-                But of course we are using a proper database here and you can group operations in a transaction. 
-                The `transact` function creates a new docstore with it's own isolated connection that is used for the duration of 
-                the transaction. This ensures that it succeeds or rolls back as a whole and prevents other threads 
-                from sending sql commands on the same connection. We need this because connections are shared and queries
-                are non blocking.
+                The `transact` function creates a new docstore with it's own isolated connection and the same parameters 
+                as its parent. The isolated connection is used for the duration of 
+                the transaction and exclusive to your code block. This prevents other parts of your code from sending sql commands on the connection. 
+                
+                If you are used to blocking IO frameworks this may be a bit surprising. However, we need this 
+                because connections in jasync are shared and queries are non blocking. Without using an isolated connection, 
+                other parts of your code might run their own queries in your transaction, which of course is not desirable.
             """.trimIndent()
 
             suspendingBlock {
