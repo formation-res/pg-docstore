@@ -29,6 +29,15 @@ data class DocStoreEntry(
     val text: String?
 )
 
+fun String.sanitizeInputForDB(): String {
+    // Define a regular expression for disallowed characters or strings
+    // For example, this regex will remove single quotes, double quotes, semicolons, and SQL comment syntax
+    val disallowedPattern = """['";]|(--)|(/\*)|(\*/)|(#\s)""".toRegex()
+
+    // Replace disallowed characters with a space
+    return disallowedPattern.replace(this, " ")
+}
+
 fun String.camelCase2SnakeCase(): String {
     val re = "(?<=[a-z0-9])[A-Z]".toRegex()
     return re.replace(this) { m -> "_${m.value}" }.lowercase()
@@ -374,6 +383,7 @@ class DocStore<T : Any>(
     ): Flow<DocStoreEntry> {
         return queryFlow(
             query = constructQuery(tags, query, orTags),
+            // query is used in select and then once more in the where
             params = tags + listOfNotNull(query),
             fetchSize = fetchSize
         ) { row ->
@@ -390,6 +400,7 @@ class DocStore<T : Any>(
         val q = constructQuery(tags, query, orTags)
         return queryFlow(
             query = q,
+            // query is used in select and then once more in the where
             params = tags + listOfNotNull(query),
             fetchSize = fetchSize
         ) { row ->
@@ -405,7 +416,14 @@ class DocStore<T : Any>(
         query: String?,
         orTags: Boolean,
         limit: Int? = null,
+        offset: Int = 0
     ): String {
+        val rankSelect = if(!query.isNullOrBlank()) {
+            // prepared statement does not work for this
+            ", ts_rank_cd(text, '${query.sanitizeInputForDB()}') AS rank"
+        } else {
+            ""
+        }
         val whereClause = if (tags.isEmpty() && query.isNullOrBlank()) {
             ""
         } else {
@@ -419,9 +437,16 @@ class DocStore<T : Any>(
 
         }
 
-        val limitClause = if (limit != null) " LIMIT $limit" else ""
+        val limitClause = if (limit != null) {
+            " LIMIT $limit" + if(offset>0) " OFFSET $offset" else ""
+        } else ""
 
-        return "SELECT * FROM $tableName $whereClause ORDER BY updated_at DESC$limitClause"
+        val orderByClause = if(query.isNullOrBlank()) {
+            "ORDER BY updated_at DESC"
+        } else {
+            "ORDER BY rank DESC"
+        }
+        return "SELECT *$rankSelect FROM $tableName $whereClause $orderByClause$limitClause"
     }
 
     private suspend fun <R> queryFlow(

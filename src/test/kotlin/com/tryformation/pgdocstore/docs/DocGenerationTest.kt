@@ -206,7 +206,7 @@ val readmeMd = sourceGitRepository.md {
                 store.getById(doc1.id)?.let {
                     println("Now it is ${it.title}")
                 }
-                
+
                 // delete a document
                 store.delete(doc1)
                 println("now it's gone: ${store.getById(doc1.id)}")
