@@ -387,16 +387,14 @@ val readmeMd = sourceGitRepository.md {
 
                 // rollbacks happen if there are exceptions
                 val another = MyModel(
-                    title = "Another",
+                    title = "Transactional",
                     description = "yet another document",
                     categories = listOf("foo")
                 )
                 runCatching {
                     store.transact { tStore ->
                         tStore.create(another)
-                        tStore.update(another) {
-                            another.copy(title = "Modified")
-                        }
+
                         println(
                             "in the transaction it exists as: ${
                                 tStore.getById(another.id)?.title

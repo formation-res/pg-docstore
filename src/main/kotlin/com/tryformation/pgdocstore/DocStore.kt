@@ -98,15 +98,37 @@ class DocStore<T : Any>(
         }
     }
 
+    /**
+     * Create a document. The [idExtractor] will be used to extract an id from the document.
+     *
+     * Optionally, you can override the [timestamp] and specify that the document should be
+     * overwritten if it already exists with [onConflictUpdate].
+     *
+     * Returns the created [DocStoreEntry]
+     */
     suspend fun create(
         doc: T,
         timestamp: Instant = Clock.System.now(),
         onConflictUpdate:Boolean=false
-    ) {
-        create(idExtractor.invoke(doc), doc, timestamp,onConflictUpdate)
+    ): DocStoreEntry {
+        return create(idExtractor.invoke(doc), doc, timestamp,onConflictUpdate)
     }
 
-    suspend fun create(id: String, doc: T, timestamp: Instant = Clock.System.now(),onConflictUpdate:Boolean=false) {
+    /**
+     * Create a documen and use the specified [id] as the id.
+     *
+     * Optionally, you can override the [timestamp] and specify that the document should be
+     * overwritten if it already exists with [onConflictUpdate]
+     *
+     * Returns the created [DocStoreEntry]
+     *
+     */
+    suspend fun create(
+        id: String,
+        doc: T,
+        timestamp: Instant = Clock.System.now(),
+        onConflictUpdate: Boolean = false
+    ): DocStoreEntry {
         val txt = json.encodeToString(serializationStrategy, doc)
         val tags = tagExtractor.invoke(doc)
         val text = textExtractor.invoke(doc)
@@ -127,8 +149,14 @@ class DocStore<T : Any>(
                 }
             """.trimIndent(), listOf(id, timestamp, timestamp, txt, tags, text)
         )
+        return DocStoreEntry(id, timestamp,timestamp,txt,tags,text)
     }
 
+    /**
+     * Retrieve a document by [id].
+     *
+     * Returns the deserialized document or null if it doesn't exist.
+     */
     suspend fun getById(id: String): T? {
         return connection.sendPreparedStatement(
             """
@@ -145,6 +173,9 @@ class DocStore<T : Any>(
         }
     }
 
+    /**
+     * Retrieve multiple documents by their [ids].
+     */
     suspend fun multiGetById(ids: List<String>): List<T> {
 
         return connection.sendPreparedStatement(
@@ -162,6 +193,9 @@ class DocStore<T : Any>(
         }
     }
 
+    /**
+     * Retrieve a [DocStoreEntry] by its [id]. Returns null if there is no matching entry.
+     */
     suspend fun getEntryById(id: String): DocStoreEntry? {
         return connection.sendPreparedStatement(
             """
@@ -177,6 +211,9 @@ class DocStore<T : Any>(
         }
     }
 
+    /**
+     * Retrieve multiple [DocStoreEntry] by their [ids]
+     */
     suspend fun multiGetEntryById(ids: List<String>): List<DocStoreEntry> {
         return connection.sendPreparedStatement(
             // little hack with question marks because jasync doesn't handle lists in prepared statements
@@ -193,6 +230,14 @@ class DocStore<T : Any>(
         }
     }
 
+    /**
+     * Update a document. The document will be retrieved from the database and then the [updateFunction]
+     * is applied to it to modify it.
+     *
+     * You can optionally specify a different [timestamp] than now.
+     *
+     * Note,
+     */
     suspend fun update(
         doc: T,
         timestamp: Instant = Clock.System.now(),
@@ -205,54 +250,69 @@ class DocStore<T : Any>(
         timestamp: Instant = Clock.System.now(),
         updateFunction: (T) -> T
     ): T {
-        val newValue = connection.sendPreparedStatement(
-            """
-                select json from $tableName where id = ?
-            """.trimIndent(), listOf(id)
-        ).let {
-            if (it.rows.isNotEmpty()) {
-                val firstRow = it.rows.first()
+        return connection.inTransaction { tsc ->
 
-                firstRow.getString(DocStoreEntry::json.name)?.let { str ->
-                    json.decodeFromString(serializationStrategy, str).let { original ->
-                        val updated = updateFunction.invoke(original)
-                        val tags = tagExtractor.invoke(updated)
-                        val text = textExtractor.invoke(updated)
-                        val txt = json.encodeToString(serializationStrategy, updated)
-                        connection.sendPreparedStatement(
-                            """
-                                UPDATE $tableName
-                                SET 
-                                    updated_at = ?,
-                                    json= ?,
-                                    tags = ?,
-                                    text = to_tsvector(coalesce(?))
-                                WHERE id = ?    
-                            """.trimIndent(), listOf(timestamp, txt, tags, text, id)
-                        )
-                        updated
-                    }
-                } ?: error("row has no json")
-            } else {
-                // FIXME exception handling
-                error("not found")
+            tsc.sendPreparedStatement(
+                """
+                    select json from $tableName where id = ?
+                """.trimIndent(), listOf(id)
+            ).let {
+                if (it.rows.isNotEmpty()) {
+                    val firstRow = it.rows.first()
+
+                    firstRow.getString(DocStoreEntry::json.name)?.let { str ->
+                        json.decodeFromString(serializationStrategy, str).let { original ->
+                            val updated = updateFunction.invoke(original)
+                            val tags = tagExtractor.invoke(updated)
+                            val text = textExtractor.invoke(updated)
+                            val txt = json.encodeToString(serializationStrategy, updated)
+                            tsc.sendPreparedStatement(
+                                """
+                                    UPDATE $tableName
+                                    SET 
+                                        updated_at = ?,
+                                        json= ?,
+                                        tags = ?,
+                                        text = to_tsvector(coalesce(?))
+                                    WHERE id = ?    
+                                """.trimIndent(), listOf(timestamp, txt, tags, text, id)
+                            )
+                            updated
+                        }
+                    } ?: error("row has no json")
+                } else {
+                    // FIXME exception handling
+                    error("not found")
+                }
             }
         }
-
-        return newValue
     }
 
+    /**
+     * Deletes a [document].
+     */
     suspend fun delete(
-        doc: T,
-    ) = delete(idExtractor.invoke(doc))
+        document: T,
+    ) = delete(idExtractor.invoke(document))
 
-
+    /**
+     * Delete a document by its [id].
+     */
     suspend fun delete(id: String) {
         connection.sendPreparedStatement(
             """DELETE FROM $tableName WHERE id = ?""", listOf(id)
         )
     }
 
+    /**
+     * Bulk insert documents from a [flow].
+     *
+     * Specify [chunkSize] to control how many documents
+     * are inserted for each page. Note, unless you surround this with transact,
+     * no transaction is used.
+     *
+     * Useful in combination with [documentsByRecencyScrolling], which returns a flow of documents.
+     */
     suspend fun bulkInsert(
         flow: Flow<T>,
         chunkSize: Int = 100, delayMillis: Duration = 1.seconds
@@ -266,6 +326,13 @@ class DocStore<T : Any>(
         )
     }
 
+    /**
+     * Bulk insert a [sequence].
+     *
+     * Specify [chunkSize] to control how many documents
+     * are inserted for each page. Note, unless you surround this with transact,
+     * no transaction is used.
+     */
     suspend fun bulkInsert(
         sequence: Sequence<T>,
         chunkSize: Int = 100
@@ -278,6 +345,13 @@ class DocStore<T : Any>(
         )
     }
 
+    /**
+     * Bulk insert any [iterable] (List, Set, etc.).
+     *
+     * Specify [chunkSize] to control how many documents
+     * are inserted for each page. Note, unless you surround this with transact,
+     * no transaction is used.
+     */
     suspend fun bulkInsert(
         iterable: Iterable<T>,
         chunkSize: Int = 100
@@ -290,22 +364,51 @@ class DocStore<T : Any>(
         )
     }
 
+    /**
+     * Bulk insert documents from a [flow].
+     *
+     * Specify [chunkSize] to control how many documents
+     * are inserted for each page. Note, unless you surround this with transact,
+     * no transaction is used.
+     *
+     * Useful in combination with [documentsByRecencyScrolling], which returns a flow of documents.
+     */
     suspend fun bulkInsertWithId(flow: Flow<Pair<String, T>>, chunkSize: Int = 100, delayMillis: Duration = 1.seconds) {
         flow.chunked(chunkSize = chunkSize, delayMillis = delayMillis).collect { chunk ->
             insertList(chunk)
         }
     }
 
+    /**
+     * Bulk insert documents from an [iterable].
+     *
+     * Specify [chunkSize] to control how many documents
+     * are inserted for each page. Note, unless you surround this with transact,
+     * no transaction is used.
+     */
     suspend fun bulkInsertWithId(iterable: Iterable<Pair<String, T>>, chunkSize: Int = 100) {
         bulkInsertWithId(iterable.asSequence(), chunkSize)
     }
 
+    /**
+     * Bulk insert documents from a [sequence].
+     *
+     * Specify [chunkSize] to control how many documents
+     * are inserted for each page. Note, unless you surround this with transact,
+     * no transaction is used.
+     */
     suspend fun bulkInsertWithId(sequence: Sequence<Pair<String, T>>, chunkSize: Int = 100) {
         sequence.chunked(chunkSize).forEach { chunk ->
             insertList(chunk)
         }
     }
 
+    /**
+     * Insert a list of id, document pairs. Used by the various bulk inserts to insert documents.
+     *
+     * This falls back to overwriting the document with ON CONFLICT (id) DO UPDATE in case
+     * the document already exists.
+     */
     suspend fun insertList(chunk: List<Pair<String, T>>,timestamp: Instant = Clock.System.now()) {
         // Base SQL for INSERT
         val baseSql = """
@@ -344,14 +447,30 @@ class DocStore<T : Any>(
         }
     }
 
+    /**
+     * Returns a list of documents ordered by recency. This fetches a maximum of [limit] document
+     * from the specified [offset]
+     *
+     * You can optionally constrain
+     * the query with [tags]. If you set [orTags] to true, a logical OR will be used.
+     *
+     * You can also specify a text [query]. In that case the results will be ordered by
+     * their ranking.
+     */
     suspend fun documentsByRecency(
         tags: List<String> = emptyList(),
         orTags: Boolean = false,
         query: String? = null,
         limit: Int = 100,
-
+        offset: Int = 0,
         ): List<T> {
-        val q = constructQuery(tags, query, orTags, limit)
+        val q = constructQuery(
+            tags = tags,
+            query = query,
+            orTags = orTags,
+            limit = limit,
+            offset = offset
+        )
         return connection.sendPreparedStatement(q, tags + listOfNotNull(query)).let { result ->
             result.rows.map { row ->
                 val js = row.getString(DocStoreEntry::json.name) ?: error("no json")
@@ -360,14 +479,23 @@ class DocStore<T : Any>(
         }
     }
 
+    /**
+     * Similar to [documentsByRecency] but returns a list of the [DocStoreEntry] with the full row data.
+     */
     suspend fun entriesByRecency(
         tags: List<String> = emptyList(),
         orTags: Boolean = false,
         query: String? = null,
         limit: Int = 100,
-
+        offset: Int = 0,
         ): List<DocStoreEntry> {
-        val q = constructQuery(tags, query, orTags, limit)
+        val q = constructQuery(
+            tags = tags,
+            query = query,
+            orTags = orTags,
+            limit = limit,
+            offset = offset
+        )
         return connection.sendPreparedStatement(q, tags + listOfNotNull(query)).let { result ->
             result.rows.map { row ->
                 row.docStoreEntry
@@ -375,29 +503,32 @@ class DocStore<T : Any>(
         }
     }
 
-    suspend fun entriesByRecencyScrolling(
-        tags: List<String> = emptyList(),
-        orTags: Boolean = false,
-        query: String? = null,
-        fetchSize: Int = 100,
-    ): Flow<DocStoreEntry> {
-        return queryFlow(
-            query = constructQuery(tags, query, orTags),
-            // query is used in select and then once more in the where
-            params = tags + listOfNotNull(query),
-            fetchSize = fetchSize
-        ) { row ->
-            row.docStoreEntry
-        }
-    }
 
+    /**
+     * Returns a flow of documents ordered by recency. This will scroll through the results
+     * and fetch pages of results [fetchSize] documents at the time. Each document is emitted
+     * to the flow as it comes in.
+     *
+     * You can use this to efficiently process all documents in your store.
+     *
+     * You can optionally constrain
+     * the query with [tags]. If you set [orTags] to true, a logical OR will be used
+     * and otherwise it defaults to an AND.
+     *
+     * You can also specify a text [query]. In that case the results will be ordered by
+     * their ranking.
+     */
     suspend fun documentsByRecencyScrolling(
         tags: List<String> = emptyList(),
         orTags: Boolean = false,
         query: String? = null,
         fetchSize: Int = 100,
     ): Flow<T> {
-        val q = constructQuery(tags, query, orTags)
+        val q = constructQuery(
+            tags = tags,
+            query = query,
+            orTags = orTags
+        )
         return queryFlow(
             query = q,
             // query is used in select and then once more in the where
@@ -408,6 +539,29 @@ class DocStore<T : Any>(
                 serializationStrategy,
                 row.getString(DocStoreEntry::json.name) ?: error("empty json")
             )
+        }
+    }
+
+    /**
+     * Similar to [documentsByRecencyScrolling] but returns a flow of the [DocStoreEntry] with the full row data.
+     */
+    suspend fun entriesByRecencyScrolling(
+        tags: List<String> = emptyList(),
+        orTags: Boolean = false,
+        query: String? = null,
+        fetchSize: Int = 100,
+    ): Flow<DocStoreEntry> {
+        return queryFlow(
+            query = constructQuery(
+                tags = tags,
+                query = query,
+                orTags = orTags
+            ),
+            // query is used in select and then once more in the where
+            params = tags + listOfNotNull(query),
+            fetchSize = fetchSize
+        ) { row ->
+            row.docStoreEntry
         }
     }
 
@@ -429,7 +583,13 @@ class DocStore<T : Any>(
         } else {
             "WHERE " + listOfNotNull(
                 tags.takeIf { it.isNotEmpty() }
-                    ?.let { tags.joinToString(if (orTags) " OR " else " AND ") { "? = ANY(tags)" } },
+                    ?.let { tags.joinToString(
+                        if (orTags) " OR " else " AND "
+                    ) { "? = ANY(tags)" } }
+                    ?.let {
+                        // surround with parentheses
+                        "($it)"
+                    },
                 query?.takeIf { it.isNotBlank() }?.let {
                     """text @@ websearch_to_tsquery('english',?)"""
                 }
@@ -484,6 +644,16 @@ class DocStore<T : Any>(
         }
     }
 
+    /**
+     * Updates all documents in the store and re-runs all the extract functions.
+     *
+     * This is useful when you change the way those functions work.
+     *
+     * Note, this may take a while to run on a big database.
+     * Also, while documentsByRecencyScrolling necessarily has its
+     * own transaction (scrolling has to be done in a transaction), bulkInsert does not.
+     * You can wrap the bulkInsert with a separate transaction but it will be a separate one.
+     */
     suspend fun reExtract() {
         bulkInsert(documentsByRecencyScrolling())
     }
