@@ -8,7 +8,7 @@ import com.github.jasync.sql.db.postgresql.PostgreSQLConnectionBuilder
 import com.github.jasync.sql.db.postgresql.exceptions.GenericDatabaseException
 import com.jillesvangurp.kotlin4example.SourceRepository
 import com.tryformation.pgdocstore.DocStore
-import com.tryformation.pgdocstore.reCreateDocStoreSchema
+import com.tryformation.pgdocstore.reCreateDocStoreTable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.count
 import kotlinx.coroutines.flow.flow
@@ -56,7 +56,7 @@ val readmeMd = sourceGitRepository.md {
             ).asSuspending
 
         runBlocking {
-            connection.reCreateDocStoreSchema("docs")
+            connection.reCreateDocStoreTable("docs")
         }
         @Serializable
         data class MyModel(
@@ -103,7 +103,7 @@ val readmeMd = sourceGitRepository.md {
                     ).asSuspending
 
                 // recreate the docs table
-                connection.reCreateDocStoreSchema("docs")
+                connection.reCreateDocStoreTable("docs")
             }
 
             +"""

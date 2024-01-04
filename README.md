@@ -49,7 +49,7 @@ val connection = PostgreSQLConnectionBuilder
   ).asSuspending
 
 // recreate the docs table
-connection.reCreateDocStoreSchema("docs")
+connection.reCreateDocStoreTable("docs")
 ```
 
 The `reCreateDocStoreSchema` call applies the docstore table schema to a docs table and re-creates that.
