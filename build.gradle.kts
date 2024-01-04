@@ -62,10 +62,23 @@ configure<ComposeExtension> {
     setProjectName("pg-docstore")
 }
 
+val sourcesJar by tasks.registering(Jar::class) {
+    archiveClassifier.set("sources")
+    from(sourceSets.main.get().allSource)
+}
+
+val dokkaJar = tasks.register<Jar>("dokkaJar") {
+    from(tasks["dokkaHtml"])
+    dependsOn(tasks["dokkaHtml"])
+    archiveClassifier.set("javadoc")
+}
+
 publishing {
     publications {
         create<MavenPublication>("maven") {
             from(components["java"])
+            artifact(sourcesJar.get())
+            artifact(dokkaJar.get())
         }
     }
     repositories {
