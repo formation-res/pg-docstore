@@ -24,14 +24,9 @@ open class DbTestBase {
     fun beforeAll() = coRun {
         // all tests in the same class have the same table
         tableName = "docs_${Random.nextULong()}"
-        db.reCreateDocStoreTable(tableName)
+        db.createDocStoreTable(tableName)
     }
-
-    @AfterAll
-    fun afterAll() = coRun {
-        db.dropDocStoreTable(tableName)
-    }
-
+    
     fun coRun(timeout: Duration = 1.minutes, block: suspend () -> Unit) {
         runBlocking {
             withTimeout(timeout) {
