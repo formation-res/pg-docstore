@@ -247,14 +247,14 @@ class DocStore<T : Any>(
     suspend fun update(
         doc: T,
         timestamp: Instant = Clock.System.now(),
-        updateFunction: (T) -> T
+        updateFunction: suspend (T) -> T
     ) = update(idExtractor.invoke(doc), timestamp, updateFunction)
 
 
     suspend fun update(
         id: String,
         timestamp: Instant = Clock.System.now(),
-        updateFunction: (T) -> T
+        updateFunction: suspend (T) -> T
     ): T {
         return connection.inTransaction { tsc ->
 
