@@ -136,7 +136,7 @@ class DocStore<T : Any>(
         connection.sendPreparedStatement(
             """
                 INSERT INTO $tableName (id, created_at, updated_at, json, tags, text)
-                VALUES (?,?,?,?,?,to_tsvector(coalesce(?)))
+                VALUES (?,?,?,?,?,?)
                 ${
                     if(onConflictUpdate) """
                         ON CONFLICT (id) DO UPDATE SET
@@ -273,7 +273,7 @@ class DocStore<T : Any>(
                                         updated_at = ?,
                                         json= ?,
                                         tags = ?,
-                                        text = to_tsvector(coalesce(?))
+                                        text = ?
                                     WHERE id = ?    
                                 """.trimIndent(), listOf(timestamp, txt, tags, text, id)
                             )
@@ -417,7 +417,7 @@ class DocStore<T : Any>(
                 """.trimIndent()
 
         // Constructing the values part of the SQL
-        val values = chunk.joinToString(", ") { " (?, ?, ?, ?, ?, to_tsvector(coalesce(?)))" } + " "
+        val values = chunk.joinToString(", ") { " (?, ?, ?, ?, ?, ?)" } + " "
         val conflictAction = """
                     ON CONFLICT (id) DO UPDATE SET
                     json = EXCLUDED.json,
@@ -455,7 +455,7 @@ class DocStore<T : Any>(
      * the query with [tags]. If you set [orTags] to true, a logical OR will be used.
      *
      * You can also specify a text [query]. In that case the results will be ordered by
-     * their ranking.
+     * their ranking. You can use [similarityThreshold] to control how strict it matches.
      */
     suspend fun documentsByRecency(
         tags: List<String> = emptyList(),
@@ -463,13 +463,15 @@ class DocStore<T : Any>(
         query: String? = null,
         limit: Int = 100,
         offset: Int = 0,
+        similarityThreshold: Double = 0.1,
         ): List<T> {
         val q = constructQuery(
             tags = tags,
             query = query,
             orTags = orTags,
             limit = limit,
-            offset = offset
+            offset = offset,
+            similarityThreshold = similarityThreshold
         )
         return connection.sendPreparedStatement(q, tags + listOfNotNull(query)).let { result ->
             result.rows.map { row ->
@@ -488,13 +490,15 @@ class DocStore<T : Any>(
         query: String? = null,
         limit: Int = 100,
         offset: Int = 0,
+        similarityThreshold: Double = 0.1,
         ): List<DocStoreEntry> {
         val q = constructQuery(
             tags = tags,
             query = query,
             orTags = orTags,
             limit = limit,
-            offset = offset
+            offset = offset,
+            similarityThreshold = similarityThreshold
         )
         return connection.sendPreparedStatement(q, tags + listOfNotNull(query)).let { result ->
             result.rows.map { row ->
@@ -516,18 +520,20 @@ class DocStore<T : Any>(
      * and otherwise it defaults to an AND.
      *
      * You can also specify a text [query]. In that case the results will be ordered by
-     * their ranking.
+     * their ranking. You can use [similarityThreshold] to control how strict it matches.
      */
     suspend fun documentsByRecencyScrolling(
         tags: List<String> = emptyList(),
         orTags: Boolean = false,
         query: String? = null,
         fetchSize: Int = 100,
-    ): Flow<T> {
+        similarityThreshold: Double = 0.1,
+        ): Flow<T> {
         val q = constructQuery(
             tags = tags,
             query = query,
-            orTags = orTags
+            orTags = orTags,
+            similarityThreshold = similarityThreshold
         )
         return queryFlow(
             query = q,
@@ -550,12 +556,14 @@ class DocStore<T : Any>(
         orTags: Boolean = false,
         query: String? = null,
         fetchSize: Int = 100,
-    ): Flow<DocStoreEntry> {
+        similarityThreshold: Double = 0.1,
+        ): Flow<DocStoreEntry> {
         return queryFlow(
             query = constructQuery(
                 tags = tags,
                 query = query,
-                orTags = orTags
+                orTags = orTags,
+                similarityThreshold = similarityThreshold
             ),
             // query is used in select and then once more in the where
             params = tags + listOfNotNull(query),
@@ -570,11 +578,12 @@ class DocStore<T : Any>(
         query: String?,
         orTags: Boolean,
         limit: Int? = null,
-        offset: Int = 0
+        offset: Int = 0,
+        similarityThreshold: Double = 0.01
     ): String {
         val rankSelect = if(!query.isNullOrBlank()) {
             // prepared statement does not work for this
-            ", ts_rank_cd(text, '${query.sanitizeInputForDB()}') AS rank"
+            ", similarity(text, '${query.sanitizeInputForDB()}') AS rank"
         } else {
             ""
         }
@@ -590,8 +599,8 @@ class DocStore<T : Any>(
                         // surround with parentheses
                         "($it)"
                     },
-                query?.takeIf { it.isNotBlank() }?.let {
-                    """text @@ websearch_to_tsquery('english',?)"""
+                query?.takeIf { q -> q.isNotBlank() }?.let {
+                    """similarity(text, ?) > $similarityThreshold"""
                 }
             ).joinToString(" AND ")
 

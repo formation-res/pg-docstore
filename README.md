@@ -124,7 +124,8 @@ try {
 // by overwriting the original
 store.create(
   doc1.copy(title = "Numero Uno"),
-  onConflictUpdate = true)
+  onConflictUpdate = true
+)
 
 // now it is changed
 store.getById(doc1.id)?.let {
@@ -169,8 +170,8 @@ now it's gone: null
 You can get multiple documents in one go like this:
 
 ```kotlin
-store.create(MyModel(id="1", title = "Foo"))
-store.create(MyModel(id="1", title = "Bar"))
+store.create(MyModel(id = "1", title = "Foo"))
+store.create(MyModel(id = "2", title = "Bar"))
 val docs =
   store.multiGetById(listOf("1", "2"))
 println(docs.map { it.title })
@@ -179,7 +180,7 @@ println(docs.map { it.title })
 This prints:
 
 ```text
-
+[Foo, Bar]
 ```
 
 ### Bulk inserting documents
@@ -261,29 +262,41 @@ This prints:
 
 ```text
 five most recent documents: [Bulk 199, Bulk 198, Bulk 197, Bulk 196, Bulk 195]
-Total documents: 201
-201
+Total documents: 202
+202
 Just the bulk tagged documents: 200
 ```
 
 While no substitute for a proper search engine, postgres has some
-text search facilities.
+text search facilities. We use a simple trigram index which is great
+for common use cases for things like matching and ranking on ids,
+email addresses, parts of words, etc.
 
 ```kotlin
 
 store.create(MyModel("The quick brown fox"))
 // or search on the extracted text
-println(
-  "Found for 'fox': ${
-    store.documentsByRecency(query = "fox").first().title
-  }"
-)
+println("Found:")
+store.documentsByRecency(
+  query = "brown fox",
+  // will produce a lot of hits
+  // increase for stricter match
+  similarityThreshold = 0.01,
+  limit = 5
+).forEach {
+  println("-${it.title}")
+}
 ```
 
 This prints:
 
 ```text
-Found for 'fox': The quick brown fox
+Found:
+-The quick brown fox
+-Foo
+-Bar
+-Bulk 2
+-Bulk 1
 ```
 
 ### Transactions

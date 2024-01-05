@@ -183,7 +183,8 @@ val readmeMd = sourceGitRepository.md {
                 // by overwriting the original
                 store.create(
                     doc1.copy(title = "Numero Uno"),
-                    onConflictUpdate = true)
+                    onConflictUpdate = true
+                )
 
                 // now it is changed
                 store.getById(doc1.id)?.let {
@@ -223,8 +224,8 @@ val readmeMd = sourceGitRepository.md {
                 You can get multiple documents in one go like this:
             """.trimIndent()
             example {
-                store.create(MyModel(id="1", title = "Foo"))
-                store.create(MyModel(id="1", title = "Bar"))
+                store.create(MyModel(id = "1", title = "Foo"))
+                store.create(MyModel(id = "2", title = "Bar"))
                 val docs =
                     store.multiGetById(listOf("1", "2"))
                 println(docs.map { it.title })
@@ -318,17 +319,24 @@ val readmeMd = sourceGitRepository.md {
 
             +"""
                 While no substitute for a proper search engine, postgres has some
-                text search facilities.
+                text search facilities. We use a simple trigram index which is great
+                for common use cases for things like matching and ranking on ids,
+                email addresses, parts of words, etc.
             """.trimIndent()
             example {
 
                 store.create(MyModel("The quick brown fox"))
                 // or search on the extracted text
-                println(
-                    "Found for 'fox': ${
-                        store.documentsByRecency(query = "fox").first().title
-                    }"
-                )
+                println("Found:")
+                store.documentsByRecency(
+                    query = "brown fox",
+                    // will produce a lot of hits
+                    // increase for stricter match
+                    similarityThreshold = 0.01,
+                    limit = 5
+                ).forEach {
+                    println("-${it.title}")
+                }
             }.let {
                 +"""
                     This prints:
