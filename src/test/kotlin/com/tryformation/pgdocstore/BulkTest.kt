@@ -1,5 +1,6 @@
 package com.tryformation.pgdocstore
 
+import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.flow.count
 import kotlinx.coroutines.flow.flow
@@ -33,5 +34,6 @@ class BulkTest : DbTestBase() {
         ds.count() shouldBe 200
         ds.multiGetById(stored.map { it.id }.take(13)).size shouldBe 13
         ds.multiGetEntryById(stored.map { it.id }.take(13)).size shouldBe 13
+        ds.multiGetById(listOf()) shouldHaveSize 0
     }
 }

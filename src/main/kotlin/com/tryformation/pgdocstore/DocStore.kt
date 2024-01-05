@@ -180,18 +180,21 @@ class DocStore<T : Any>(
      * Retrieve multiple documents by their [ids].
      */
     suspend fun multiGetById(ids: List<String>): List<T> {
-
-        return connection.sendPreparedStatement(
-            // little hack with question marks because jasync doesn't handle lists in prepared statements
-            query = """
-                    select ${DocStoreEntry::json.name} from $tableName where id in (${ids.joinToString(",") { "?" }})
-                """.trimIndent(),
-            values = ids,
-            // release because number of question marks may vary ...
-            release = true
-        ).rows.mapNotNull { row ->
-            row.getString(DocStoreEntry::json.name)?.let { str ->
-                json.decodeFromString(serializationStrategy, str)
+        return if(ids.isEmpty()) {
+            emptyList()
+        } else {
+            connection.sendPreparedStatement(
+                // little hack with question marks because jasync doesn't handle lists in prepared statements
+                query = """
+                            select ${DocStoreEntry::json.name} from $tableName where id in (${ids.joinToString(",") { "?" }})
+                        """.trimIndent(),
+                values = ids,
+                // release because number of question marks may vary ...
+                release = true
+            ).rows.mapNotNull { row ->
+                row.getString(DocStoreEntry::json.name)?.let { str ->
+                    json.decodeFromString(serializationStrategy, str)
+                }
             }
         }
     }
