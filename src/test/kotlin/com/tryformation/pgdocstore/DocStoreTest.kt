@@ -1,5 +1,6 @@
 package com.tryformation.pgdocstore
 
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import kotlinx.coroutines.delay
@@ -27,6 +28,23 @@ class DocStoreTest : DbTestBase() {
         ds.getById("42")?.property shouldBe "foo"
         ds.delete("42")
         ds.getById("42") shouldBe null
+    }
+
+    @Test
+    fun deleteOfIdThatDoesNotExist() = coRun{
+        val ds = DocStore(db, TestModel.serializer(), tableName)
+        ds.delete("idontexist")
+    }
+
+    @Test
+    fun updateOfIdThatDoesnNotExist() = coRun {
+        val ds = DocStore(db, TestModel.serializer(), tableName)
+        shouldThrow<DocumentNotFoundException> {
+            ds.update("idontexist") {
+                it
+            }
+        }
+
     }
 
     @Test

@@ -287,8 +287,7 @@ class DocStore<T : Any>(
                         }
                     } ?: error("row has no json")
                 } else {
-                    // FIXME exception handling
-                    error("not found")
+                    throw DocumentNotFoundException(id)
                 }
             }
         }
