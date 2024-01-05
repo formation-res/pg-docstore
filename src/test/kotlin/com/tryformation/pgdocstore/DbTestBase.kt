@@ -26,7 +26,12 @@ open class DbTestBase {
         tableName = "docs_${Random.nextULong()}"
         db.createDocStoreTable(tableName)
     }
-    
+
+    @AfterAll
+    fun afterAll() = coRun {
+        db.dropDocStoreTable(tableName)
+    }
+
     fun coRun(timeout: Duration = 1.minutes, block: suspend () -> Unit) {
         runBlocking {
             withTimeout(timeout) {

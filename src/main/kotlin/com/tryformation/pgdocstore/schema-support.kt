@@ -20,10 +20,16 @@ suspend fun SuspendingConnection.dropDocStoreTable(tableName: String = "docstore
 
 suspend fun SuspendingConnection.createDocStoreTable(tableName: String) {
     inTransaction { c ->
+        runCatching {
+            // this sometimes fails in CI and we don't care
+            // we have lots of tests running concurrently so this can happen
+            // somehow
+            c.sendQuery(
+                "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+            )
+        }
         c.sendQuery(
             """
-                CREATE EXTENSION IF NOT EXISTS pg_trgm;
-
                 CREATE TABLE IF NOT EXISTS "$tableName" (
                   id       text PRIMARY KEY,
                   created_at timestamptz DEFAULT current_timestamp,
