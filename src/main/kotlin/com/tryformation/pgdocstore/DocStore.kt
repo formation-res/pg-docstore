@@ -26,7 +26,8 @@ data class DocStoreEntry(
     val updatedAt: Instant,
     val json: String,
     val tags: List<String>?,
-    val text: String?
+    val text: String?,
+    val similarity: Float? = null
 )
 
 fun String.sanitizeInputForDB(): String {
@@ -64,6 +65,8 @@ val RowData.docStoreEntry
             it as List<String>
         },
         text = getString(DocStoreEntry::text.name),
+        // only there on searches with a text
+        similarity = this.size.takeIf { it > 6}?.let { getFloat("rank") },
     )
 
 class DocStore<T : Any>(
@@ -109,9 +112,9 @@ class DocStore<T : Any>(
     suspend fun create(
         doc: T,
         timestamp: Instant = Clock.System.now(),
-        onConflictUpdate:Boolean=false
+        onConflictUpdate: Boolean = false
     ): DocStoreEntry {
-        return create(idExtractor.invoke(doc), doc, timestamp,onConflictUpdate)
+        return create(idExtractor.invoke(doc), doc, timestamp, onConflictUpdate)
     }
 
     /**
@@ -138,18 +141,18 @@ class DocStore<T : Any>(
                 INSERT INTO $tableName (id, created_at, updated_at, json, tags, text)
                 VALUES (?,?,?,?,?,?)
                 ${
-                    if(onConflictUpdate) """
+                if (onConflictUpdate) """
                         ON CONFLICT (id) DO UPDATE SET
                             json = EXCLUDED.json,
                             tags = EXCLUDED.tags,                   
                             text = EXCLUDED.text,                                     
                             updated_at = EXCLUDED.updated_at
                     """.trimIndent()
-                    else ""
-                }
+                else ""
+            }
             """.trimIndent(), listOf(id, timestamp, timestamp, txt, tags, text)
         )
-        return DocStoreEntry(id, timestamp,timestamp,txt,tags,text)
+        return DocStoreEntry(id, timestamp, timestamp, txt, tags, text)
     }
 
     /**
@@ -409,7 +412,7 @@ class DocStore<T : Any>(
      * This falls back to overwriting the document with ON CONFLICT (id) DO UPDATE in case
      * the document already exists.
      */
-    suspend fun insertList(chunk: List<Pair<String, T>>,timestamp: Instant = Clock.System.now()) {
+    suspend fun insertList(chunk: List<Pair<String, T>>, timestamp: Instant = Clock.System.now()) {
         // Base SQL for INSERT
         val baseSql = """
                     INSERT INTO $tableName (id, json, tags, created_at, updated_at, text)
@@ -464,7 +467,7 @@ class DocStore<T : Any>(
         limit: Int = 100,
         offset: Int = 0,
         similarityThreshold: Double = 0.1,
-        ): List<T> {
+    ): List<T> {
         val q = constructQuery(
             tags = tags,
             query = query,
@@ -491,7 +494,7 @@ class DocStore<T : Any>(
         limit: Int = 100,
         offset: Int = 0,
         similarityThreshold: Double = 0.1,
-        ): List<DocStoreEntry> {
+    ): List<DocStoreEntry> {
         val q = constructQuery(
             tags = tags,
             query = query,
@@ -528,7 +531,7 @@ class DocStore<T : Any>(
         query: String? = null,
         fetchSize: Int = 100,
         similarityThreshold: Double = 0.1,
-        ): Flow<T> {
+    ): Flow<T> {
         val q = constructQuery(
             tags = tags,
             query = query,
@@ -557,7 +560,7 @@ class DocStore<T : Any>(
         query: String? = null,
         fetchSize: Int = 100,
         similarityThreshold: Double = 0.1,
-        ): Flow<DocStoreEntry> {
+    ): Flow<DocStoreEntry> {
         return queryFlow(
             query = constructQuery(
                 tags = tags,
@@ -581,7 +584,7 @@ class DocStore<T : Any>(
         offset: Int = 0,
         similarityThreshold: Double = 0.01
     ): String {
-        val rankSelect = if(!query.isNullOrBlank()) {
+        val rankSelect = if (!query.isNullOrBlank()) {
             // prepared statement does not work for this
             ", similarity(text, '${query.sanitizeInputForDB()}') AS rank"
         } else {
@@ -592,9 +595,11 @@ class DocStore<T : Any>(
         } else {
             "WHERE " + listOfNotNull(
                 tags.takeIf { it.isNotEmpty() }
-                    ?.let { tags.joinToString(
-                        if (orTags) " OR " else " AND "
-                    ) { "? = ANY(tags)" } }
+                    ?.let {
+                        tags.joinToString(
+                            if (orTags) " OR " else " AND "
+                        ) { "? = ANY(tags)" }
+                    }
                     ?.let {
                         // surround with parentheses
                         "($it)"
@@ -607,13 +612,13 @@ class DocStore<T : Any>(
         }
 
         val limitClause = if (limit != null) {
-            " LIMIT $limit" + if(offset>0) " OFFSET $offset" else ""
+            " LIMIT $limit" + if (offset > 0) " OFFSET $offset" else ""
         } else ""
 
-        val orderByClause = if(query.isNullOrBlank()) {
+        val orderByClause = if (query.isNullOrBlank()) {
             "ORDER BY updated_at DESC"
         } else {
-            "ORDER BY rank DESC"
+            "ORDER BY rank DESC, updated_at DESC"
         }
         return "SELECT *$rankSelect FROM $tableName $whereClause $orderByClause$limitClause"
     }

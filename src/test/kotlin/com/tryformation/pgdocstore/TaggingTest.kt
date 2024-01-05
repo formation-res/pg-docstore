@@ -26,8 +26,12 @@ class TaggingTest : DbTestBase() {
             TaggedModel("three", listOf("foo","bar")),
         ))
 
-        ds.documentsByRecencyScrolling(listOf("foo")).count() shouldBe 2
+        ds.documentsByRecency(listOf("foo")).count() shouldBe 2
+        ds.documentsByRecency(listOf("foo")).count() shouldBe 2
+        ds.entriesByRecency(listOf("foo")).count() shouldBe 2
+        ds.entriesByRecencyScrolling(listOf("foo")).count() shouldBe 2
         ds.documentsByRecencyScrolling(listOf("foo", "bar")).count() shouldBe 1
         ds.documentsByRecencyScrolling(listOf("foo", "bar"), orTags = true).count() shouldBe 3
     }
+
 }

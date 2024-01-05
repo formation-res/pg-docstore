@@ -1,10 +1,7 @@
 package com.tryformation.pgdocstore
 
-import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldContainAnyOf
-import io.kotest.matchers.collections.shouldContainInOrder
 import io.kotest.matchers.collections.shouldHaveSize
-import io.kotest.matchers.ints.shouldBeGreaterThan
 import io.kotest.matchers.shouldBe
 import kotlinx.serialization.Serializable
 import org.junit.jupiter.api.Test
@@ -71,56 +68,27 @@ class TextSearchTest : DbTestBase() {
         ).map { SearchableModel(it) }
         ds.bulkInsert(docs)
 
-        ds.documentsByRecency(query = "bar").map { it.title }.let {
+        ds.search(query = "bar").map { it.title }.let {
             it.first() shouldBe "bar" // clearly the best match
             // we also expect to find these
             it shouldContainAnyOf listOf("ba", "b", "foo bar foobarred")
         }
-        ds.documentsByRecency(query = "own", similarityThreshold = 0.01).map { it.title }.let {
+        ds.search(query = "own", similarityThreshold = 0.01).map { it.title }.let {
             it.first() shouldBe "the quick brown fox" // clearly the best match
         }
-        ds.documentsByRecency(query = "own", similarityThreshold = 0.5).map { it.title }.let {
+        ds.search(query = "own", similarityThreshold = 0.5).map { it.title }.let {
             it shouldHaveSize 0
         }
     }
-
-    @Test
-    fun shouldDoTrigrams() = coRun {
-        db.sendQuery(
-            """
-            CREATE EXTENSION IF NOT EXISTS pg_trgm;
-            DROP INDEX IF EXISTS idx_trigrams_text;
-            DROP TABLE IF EXISTS trigrams;
-            
-            CREATE TABLE IF NOT EXISTS trigrams (
-                  id       text PRIMARY KEY,
-                  text     text
-                );
-                
-            CREATE INDEX idx_trigrams_text ON trigrams USING gin (text gin_trgm_ops);
-                
-            INSERT INTO trigrams (id, text) VALUES ('1', 'test@domain.com');
-            INSERT INTO trigrams (id, text) VALUES ('2', 'alice@aaa.com');
-            INSERT INTO trigrams (id, text) VALUES ('3', 'bob@bobby.com');
-            INSERT INTO trigrams (id, text) VALUES ('4', 'the quick brown fox');
-            INSERT INTO trigrams (id, text) VALUES ('5', 'the slow yellow fox');
-        """.trimIndent()
-        )
-
-        val q = "brown fox"
-        db.sendQuery(
-            """           
-            SELECT text, similarity(text, '$q') AS sml FROM trigrams WHERE similarity(text, '$q') > 0.01 ORDER BY sml DESC
-        """.trimIndent()
-        ).rows.also {
-            println(
-                """
-                RESULTS: ${it.size}
-            """.trimIndent()
-            )
-            it.size shouldBeGreaterThan 0
-        }.forEach {
-            println("${it["text"]} ${it["sml"]}")
-        }
-    }
 }
+
+private suspend fun DocStore<*>.search(query: String, similarityThreshold:Double = 0.1) =
+    entriesByRecency(query = query, similarityThreshold = similarityThreshold).also {
+        println("Found for '$query' with threshold $similarityThreshold:")
+        it.forEach { e ->
+            val d = e.document<SearchableModel>()
+            println("- ${d.title} (${e.similarity})")
+        }
+    }.map {
+        it.document<SearchableModel>()
+    }
