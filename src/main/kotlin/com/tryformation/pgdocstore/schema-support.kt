@@ -10,6 +10,7 @@ suspend fun SuspendingConnection.dropDocStoreTable(tableName: String = "docstore
                 drop index if exists idx_${tableName}_created_at;
                 drop index if exists idx_${tableName}_updated_at;
                 drop index if exists idx_${tableName}_tags;
+                drop index if exists idx_${tableName}_text;
                 
                 drop table if exists $tableName;
             """.trimIndent()
