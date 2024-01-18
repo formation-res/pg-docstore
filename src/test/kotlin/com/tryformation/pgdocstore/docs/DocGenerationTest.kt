@@ -392,7 +392,6 @@ val readmeMd = sourceGitRepository.md {
             """.trimIndent()
 
             example {
-
                 // rollbacks happen if there are exceptions
                 val another = MyModel(
                     title = "Transactional",

@@ -30,6 +30,11 @@ data class DocStoreEntry(
     val similarity: Float? = null
 )
 
+enum class BooleanOperator {
+    OR,
+    AND
+}
+
 fun String.sanitizeInputForDB(): String {
     // Define a regular expression for disallowed characters or strings
     // For example, this regex will remove single quotes, double quotes, semicolons, and SQL comment syntax
@@ -66,7 +71,7 @@ val RowData.docStoreEntry
         },
         text = getString(DocStoreEntry::text.name),
         // only there on searches with a text
-        similarity = this.size.takeIf { it > 6}?.let { getFloat("rank") },
+        similarity = this.size.takeIf { it > 6 }?.let { getFloat("rank") },
     )
 
 class DocStore<T : Any>(
@@ -180,7 +185,7 @@ class DocStore<T : Any>(
      * Retrieve multiple documents by their [ids].
      */
     suspend fun multiGetById(ids: List<String>): List<T> {
-        return if(ids.isEmpty()) {
+        return if (ids.isEmpty()) {
             emptyList()
         } else {
             connection.sendPreparedStatement(
@@ -457,15 +462,17 @@ class DocStore<T : Any>(
      * from the specified [offset]
      *
      * You can optionally constrain
-     * the query with [tags]. If you set [orTags] to true, a logical OR will be used.
+     * the query with [tags]. If you set [whereClauseOperator] to OR,
+     * a logical OR will be used instead of the default AND.
      *
      * You can also specify a text [query]. In that case the results will be ordered by
      * their ranking. You can use [similarityThreshold] to control how strict it matches.
      */
     suspend fun documentsByRecency(
         tags: List<String> = emptyList(),
-        orTags: Boolean = false,
         query: String? = null,
+        tagsClauseOperator: BooleanOperator = BooleanOperator.AND,
+        whereClauseOperator: BooleanOperator = BooleanOperator.AND,
         limit: Int = 100,
         offset: Int = 0,
         similarityThreshold: Double = 0.1,
@@ -473,9 +480,10 @@ class DocStore<T : Any>(
         val q = constructQuery(
             tags = tags,
             query = query,
-            orTags = orTags,
+            tagsClauseOperator = tagsClauseOperator,
             limit = limit,
             offset = offset,
+            whereClauseOperator = whereClauseOperator,
             similarityThreshold = similarityThreshold
         )
         return connection.sendPreparedStatement(q, tags + listOfNotNull(query)).let { result ->
@@ -491,8 +499,9 @@ class DocStore<T : Any>(
      */
     suspend fun entriesByRecency(
         tags: List<String> = emptyList(),
-        orTags: Boolean = false,
         query: String? = null,
+        tagsClauseOperator: BooleanOperator = BooleanOperator.AND,
+        whereClauseOperator: BooleanOperator = BooleanOperator.AND,
         limit: Int = 100,
         offset: Int = 0,
         similarityThreshold: Double = 0.1,
@@ -500,9 +509,10 @@ class DocStore<T : Any>(
         val q = constructQuery(
             tags = tags,
             query = query,
-            orTags = orTags,
+            tagsClauseOperator = tagsClauseOperator,
             limit = limit,
             offset = offset,
+            whereClauseOperator = whereClauseOperator,
             similarityThreshold = similarityThreshold
         )
         return connection.sendPreparedStatement(q, tags + listOfNotNull(query)).let { result ->
@@ -521,23 +531,25 @@ class DocStore<T : Any>(
      * You can use this to efficiently process all documents in your store.
      *
      * You can optionally constrain
-     * the query with [tags]. If you set [orTags] to true, a logical OR will be used
-     * and otherwise it defaults to an AND.
+     * the query with [tags]. If you set [whereClauseOperator] to OR,
+     * a logical OR will be used instead of the default AND.
      *
      * You can also specify a text [query]. In that case the results will be ordered by
      * their ranking. You can use [similarityThreshold] to control how strict it matches.
      */
     suspend fun documentsByRecencyScrolling(
         tags: List<String> = emptyList(),
-        orTags: Boolean = false,
         query: String? = null,
-        fetchSize: Int = 100,
+        tagsClauseOperator: BooleanOperator = BooleanOperator.AND,
+        whereClauseOperator: BooleanOperator = BooleanOperator.AND,
         similarityThreshold: Double = 0.1,
+        fetchSize: Int = 100,
     ): Flow<T> {
         val q = constructQuery(
             tags = tags,
             query = query,
-            orTags = orTags,
+            tagsClauseOperator = tagsClauseOperator,
+            whereClauseOperator = whereClauseOperator,
             similarityThreshold = similarityThreshold
         )
         return queryFlow(
@@ -558,8 +570,9 @@ class DocStore<T : Any>(
      */
     suspend fun entriesByRecencyScrolling(
         tags: List<String> = emptyList(),
-        orTags: Boolean = false,
         query: String? = null,
+        tagsClauseOperator: BooleanOperator = BooleanOperator.AND,
+        whereClauseOperator: BooleanOperator = BooleanOperator.AND,
         fetchSize: Int = 100,
         similarityThreshold: Double = 0.1,
     ): Flow<DocStoreEntry> {
@@ -567,7 +580,8 @@ class DocStore<T : Any>(
             query = constructQuery(
                 tags = tags,
                 query = query,
-                orTags = orTags,
+                tagsClauseOperator = tagsClauseOperator,
+                whereClauseOperator = whereClauseOperator,
                 similarityThreshold = similarityThreshold
             ),
             // query is used in select and then once more in the where
@@ -581,7 +595,8 @@ class DocStore<T : Any>(
     private fun constructQuery(
         tags: List<String>,
         query: String?,
-        orTags: Boolean,
+        tagsClauseOperator: BooleanOperator = BooleanOperator.AND,
+        whereClauseOperator: BooleanOperator = BooleanOperator.AND,
         limit: Int? = null,
         offset: Int = 0,
         similarityThreshold: Double = 0.01
@@ -599,7 +614,7 @@ class DocStore<T : Any>(
                 tags.takeIf { it.isNotEmpty() }
                     ?.let {
                         tags.joinToString(
-                            if (orTags) " OR " else " AND "
+                            " $tagsClauseOperator "
                         ) { "? = ANY(tags)" }
                     }
                     ?.let {
@@ -609,7 +624,7 @@ class DocStore<T : Any>(
                 query?.takeIf { q -> q.isNotBlank() }?.let {
                     """similarity(text, ?) > $similarityThreshold"""
                 }
-            ).joinToString(" AND ")
+            ).joinToString(" $whereClauseOperator ")
 
         }
 

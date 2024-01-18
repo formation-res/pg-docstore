@@ -345,7 +345,6 @@ Both docs exist: 2 after the transaction
 In case of an exception, there is a rollback.
 
 ```kotlin
-
 // rollbacks happen if there are exceptions
 val another = MyModel(
   title = "Transactional",

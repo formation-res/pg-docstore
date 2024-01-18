@@ -31,7 +31,7 @@ class TaggingTest : DbTestBase() {
         ds.entriesByRecency(listOf("foo")).count() shouldBe 2
         ds.entriesByRecencyScrolling(listOf("foo")).count() shouldBe 2
         ds.documentsByRecencyScrolling(listOf("foo", "bar")).count() shouldBe 1
-        ds.documentsByRecencyScrolling(listOf("foo", "bar"), orTags = true).count() shouldBe 3
+        ds.documentsByRecencyScrolling(listOf("foo", "bar"), tagsClauseOperator = BooleanOperator.OR).count() shouldBe 3
     }
 
 }

@@ -12,6 +12,7 @@ class SearchableModel(
     val title: String,
     val description: String? = null,
     val id: String = UUID.randomUUID().toString(),
+    val tags: List<String> = emptyList()
 )
 
 class TextSearchTest : DbTestBase() {
@@ -50,7 +51,7 @@ class TextSearchTest : DbTestBase() {
 
     @Test
     fun shouldRankCorrectly() = coRun {
-        val ds = DocStore<SearchableModel>(
+        val ds = DocStore(
             db,
             SearchableModel.serializer(),
             tableName,
@@ -80,9 +81,52 @@ class TextSearchTest : DbTestBase() {
             it shouldHaveSize 0
         }
     }
+
+    @Test
+    fun shouldDoANDorOR() = coRun {
+        val ds = DocStore(
+            db,
+            SearchableModel.serializer(),
+            tableName,
+            textExtractor = { listOfNotNull(it.title, it.description).joinToString("\n") },
+            tagExtractor = SearchableModel::tags
+        )
+        ds.bulkInsert(
+            listOf(
+                SearchableModel("Document Numero Uno", tags = listOf("foo", "bar")),
+                SearchableModel("The second one", tags = listOf("foo")),
+                SearchableModel("Another Document", tags = listOf("bar")),
+            )
+        )
+        ds.documentsByRecency(
+            tags = listOf("foo"),
+            tagsClauseOperator = BooleanOperator.AND,
+            query = "Another",
+            whereClauseOperator = BooleanOperator.AND,
+        ) shouldHaveSize 0
+        ds.documentsByRecency(
+            tags = listOf("foo"),
+            tagsClauseOperator = BooleanOperator.AND,
+            query = "Another",
+            whereClauseOperator = BooleanOperator.OR,
+        ) shouldHaveSize 3
+        ds.documentsByRecency(
+            tags = listOf("foo", "foobar"),
+            tagsClauseOperator = BooleanOperator.AND,
+            query = "Another",
+            whereClauseOperator = BooleanOperator.AND,
+        ) shouldHaveSize 0
+        ds.documentsByRecency(
+            tags = listOf("foo", "foobar"),
+            tagsClauseOperator = BooleanOperator.OR,
+            query = "Document",
+            whereClauseOperator = BooleanOperator.AND,
+        ) shouldHaveSize 1
+
+    }
 }
 
-private suspend fun DocStore<*>.search(query: String, similarityThreshold:Double = 0.1) =
+private suspend fun DocStore<*>.search(query: String, similarityThreshold: Double = 0.1) =
     entriesByRecency(query = query, similarityThreshold = similarityThreshold).also {
         println("Found for '$query' with threshold $similarityThreshold:")
         it.forEach { e ->

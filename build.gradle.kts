@@ -60,6 +60,16 @@ configure<ComposeExtension> {
     removeContainers = true
     useComposeFiles = listOf("docker-compose.yml")
     setProjectName("pg-docstore")
+    listOf("/usr/bin/docker","/usr/local/bin/docker").firstOrNull {
+        File(it).exists()
+    }?.let { docker ->
+        // works around an issue where the docker
+        // command is not found
+        // falls back to the default, which may work on
+        // some platforms
+        dockerExecutable.set(docker)
+    }
+
 }
 
 val sourcesJar by tasks.registering(Jar::class) {
