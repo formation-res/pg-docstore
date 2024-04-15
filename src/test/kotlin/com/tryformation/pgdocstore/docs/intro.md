@@ -14,6 +14,28 @@ for the elaborate querying support in databases. But we do like to keep our data
 Additionally, we like having a clear separation between what we store and what we query on. So, our architecture includes
 an ETL pipeline that builds our search index from the raw data in pg-docstore.
 
+## Gradle
+
+Add the `maven.tryformation.com` repository:
+
+```kotlin
+repositories {
+    mavenCentral()
+    maven("https://maven.tryformation.com/releases") {
+        content {
+            includeGroup("com.tryformation")
+        }
+    }
+}
+```
+
+And then the dependency to commonsMain or main:
+
+```kotlin
+    // check the latest release tag for the latest version
+    implementation("com.tryformation:pg-docstore:1.x.y")
+```
+
 ## Features
 
 - document store with crud operations for storing and retrieving json documents
@@ -25,3 +47,4 @@ an ETL pipeline that builds our search index from the raw data in pg-docstore.
 
 This library builds on jasync-postgresql, which is one of the few database drivers out there that is written in Kotlin
 and that uses non blocking IO. 
+
