@@ -5,6 +5,7 @@ package com.tryformation.pgdocstore
 import com.github.jasync.sql.db.QueryResult
 import com.github.jasync.sql.db.RowData
 import com.github.jasync.sql.db.SuspendingConnection
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.map
@@ -20,6 +21,8 @@ import kotlin.reflect.KProperty
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
+private val logger = KotlinLogging.logger {  }
+
 data class DocStoreEntry(
     val id: String,
     val createdAt: Instant,
@@ -27,7 +30,7 @@ data class DocStoreEntry(
     val json: String,
     val tags: List<String>?,
     val text: String?,
-    val similarity: Float? = null
+    val similarity: Float? = null,
 )
 
 enum class BooleanOperator {
@@ -86,7 +89,7 @@ class DocStore<T : Any>(
         val p = d::class.members.find { it.name == "id" } as KProperty<*>?
         p?.getter?.call(d)?.toString() ?: error("property id not found")
     },
-
+    private val logging: Boolean = false,
     ) {
 
     /**
@@ -101,8 +104,11 @@ class DocStore<T : Any>(
      * of the transaction. This function in turn uses that to give you a DocStore instance that uses that connection.
      */
     suspend fun <R> transact(block: suspend (DocStore<T>) -> R): R {
+        if(logging) logger.info { "$tableName start transaction" }
         return connection.inTransaction { c ->
             block.invoke(DocStore(c, serializationStrategy, tableName, json, tagExtractor, textExtractor, idExtractor))
+        }.also {
+            if(logging) logger.info { "$tableName returning from transaction" }
         }
     }
 
@@ -140,6 +146,7 @@ class DocStore<T : Any>(
         val txt = json.encodeToString(serializationStrategy, doc)
         val tags = tagExtractor.invoke(doc)
         val text = textExtractor.invoke(doc)
+        if(logging) logger.info { "$tableName creating $id" }
 
         connection.sendPreparedStatement(
             """
@@ -157,7 +164,10 @@ class DocStore<T : Any>(
             }
             """.trimIndent(), listOf(id, timestamp, timestamp, txt, tags, text)
         )
-        return DocStoreEntry(id, timestamp, timestamp, txt, tags, text)
+
+        return DocStoreEntry(id, timestamp, timestamp, txt, tags, text).also {
+            if(logging) logger.info { "$tableName created $it" }
+        }
     }
 
     /**
@@ -178,6 +188,8 @@ class DocStore<T : Any>(
             } else {
                 null
             }
+        }.also {
+            if(logging) logger.info { "$tableName get $id: $it" }
         }
     }
 
@@ -201,6 +213,8 @@ class DocStore<T : Any>(
                     json.decodeFromString(serializationStrategy, str)
                 }
             }
+        }.also {
+            if(logging) logger.info { "$tableName get $ids: returning ${it.size}" }
         }
     }
 
@@ -219,6 +233,8 @@ class DocStore<T : Any>(
             } else {
                 null
             }
+        }.also {
+            if(logging) logger.info { "$tableName get entry $id: returning ${it}" }
         }
     }
 
@@ -238,6 +254,8 @@ class DocStore<T : Any>(
             r.rows.map {
                 it.docStoreEntry
             }
+        }.also {
+            if(logging) logger.info { "$tableName get entries $ids: returning ${it.size}" }
         }
     }
 
@@ -261,7 +279,9 @@ class DocStore<T : Any>(
         timestamp: Instant = Clock.System.now(),
         updateFunction: suspend (T) -> T
     ): T {
+        logger.info { "$tableName start update transaction ${connection.hashCode()}" }
         return connection.inTransaction { tsc ->
+            logger.info { "$tableName in update transaction ${connection.hashCode()}" }
 
             tsc.sendPreparedStatement(
                 """
@@ -274,8 +294,10 @@ class DocStore<T : Any>(
                     firstRow.getString(DocStoreEntry::json.name)?.let { str ->
                         json.decodeFromString(serializationStrategy, str).let { original ->
                             val updated = updateFunction.invoke(original)
-                            val tags = tagExtractor.invoke(updated)
-                            val text = textExtractor.invoke(updated)
+                            // FIXME co-routine madness; some lambdas can hang netty here
+                            val tags = tagExtractor(updated)
+                            val text = textExtractor(updated)
+
                             val txt = json.encodeToString(serializationStrategy, updated)
                             tsc.sendPreparedStatement(
                                 """
@@ -292,9 +314,12 @@ class DocStore<T : Any>(
                         }
                     } ?: error("row has no json")
                 } else {
+                    logger.info { "$tableName document not found $id" }
                     throw DocumentNotFoundException(id)
                 }
             }
+        }.also {
+            if(logging) logger.info { "$tableName updated $id: returning ${it}" }
         }
     }
 
@@ -311,7 +336,9 @@ class DocStore<T : Any>(
     suspend fun delete(id: String) {
         connection.sendPreparedStatement(
             """DELETE FROM $tableName WHERE id = ?""", listOf(id)
-        )
+        ).also {
+            if(logging) logger.info { "$tableName deleted $id" }
+        }
     }
 
     /**
@@ -327,6 +354,7 @@ class DocStore<T : Any>(
         flow: Flow<T>,
         chunkSize: Int = 100, delayMillis: Duration = 1.seconds
     ) {
+
         bulkInsertWithId(
             flow = flow.map { d ->
                 idExtractor.invoke(d) to d
@@ -384,9 +412,13 @@ class DocStore<T : Any>(
      * Useful in combination with [documentsByRecencyScrolling], which returns a flow of documents.
      */
     suspend fun bulkInsertWithId(flow: Flow<Pair<String, T>>, chunkSize: Int = 100, delayMillis: Duration = 1.seconds) {
+        if(logging) logger.info { "$tableName done bulk inserting" }
+
         flow.chunked(chunkSize = chunkSize, delayMillis = delayMillis).collect { chunk ->
             insertList(chunk)
         }
+        if(logging) logger.info { "$tableName done bulk inserting" }
+
     }
 
     /**
@@ -448,7 +480,9 @@ class DocStore<T : Any>(
 
         // Create and execute the PreparedStatement
 
-        connection.sendPreparedStatement(sql, params)
+        connection.sendPreparedStatement(sql, params).also {
+            if(logging) logger.info { "$tableName inserted list of ${chunk.size}" }
+        }
     }
 
     suspend fun count(): Long {
