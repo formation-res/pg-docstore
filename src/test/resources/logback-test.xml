@@ -29,11 +29,7 @@
     </appender>
 
     <!-- turn off some noisy loggers -->
-    <logger name="com.github.jasync.sql.db.util.NettyUtils" level="WARN" />
-    <logger name="com.github.jasync.sql" level="WARN" />
-    <logger name="io.netty" level="WARN" />
-    <!-- the tests use the LoggingInterceptorSupplier, so we want to see that -->
-    <logger name="com.github.jasync.sql.QueryLog" level="DEBUG" />
+    <logger name="com.zaxxer.hikari" level="WARN" />
 
     <root level="DEBUG">
         <appender-ref ref="ASYNC-STDOUT"/>
