@@ -60,19 +60,19 @@ database frameworks, this framework uses non blocking IO and is co-routine frien
 and largely written in Kotlin too. This makes it a perfect choice for pg-docstore.
 
 ```kotlin
-val connection = PostgreSQLConnectionBuilder
-  .createConnectionPool(
-    ConnectionPoolConfiguration(
-      host = "localhost",
-      port = 5432,
-      database = "docstore",
-      username = "postgres",
-      password = "secret",
-    )
-  ).asSuspending
-
-// recreate the docs table
-connection.reCreateDocStoreTable("docs")
+//                val connection = PostgreSQLConnectionBuilder
+//                    .createConnectionPool(
+//                        ConnectionPoolConfiguration(
+//                            host = "localhost",
+//                            port = 5432,
+//                            database = "docstore",
+//                            username = "postgres",
+//                            password = "secret",
+//                        )
+//                    ).asSuspending
+//
+//                // recreate the docs table
+//                connection.reCreateDocStoreTable("docs")
 ```
 
 The `reCreateDocStoreSchema` call applies the docstore table schema to a docs table and re-creates that.
@@ -96,9 +96,9 @@ Using this data class, we can now create a store.
 
 ```kotlin
 val store = DocStore(
-  connection = connection,
+  dataSource = connectionPool(),
   serializationStrategy = MyModel.serializer(),
-  tableName = "docs",
+  tableName = tableName,
   idExtractor = MyModel::id,
   // optional, used for text search
   textExtractor = {
@@ -138,7 +138,7 @@ store.getById(doc1.id)?.let {
 // you can only create the same id once
 try {
   store.create(doc1)
-} catch (e: GenericDatabaseException) {
+} catch (e: Exception) {
   // fails
   println("id already exists")
 }

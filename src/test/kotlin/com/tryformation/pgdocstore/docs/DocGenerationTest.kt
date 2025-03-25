@@ -2,23 +2,21 @@
 
 package com.tryformation.pgdocstore.docs
 
-import com.github.jasync.sql.db.ConnectionPoolConfiguration
-import com.github.jasync.sql.db.asSuspending
-import com.github.jasync.sql.db.postgresql.PostgreSQLConnectionBuilder
-import com.github.jasync.sql.db.postgresql.exceptions.GenericDatabaseException
 import com.jillesvangurp.kotlin4example.SourceRepository
 import com.tryformation.pgdocstore.DocStore
-import com.tryformation.pgdocstore.reCreateDocStoreTable
-import io.github.oshai.kotlinlogging.KotlinLogging
+import com.tryformation.pgdocstore.connectionPool
+import com.tryformation.pgdocstore.createDocStoreTable
+import com.tryformation.pgdocstore.dropDocStoreTable
+import java.io.File
+import java.util.UUID
+import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.count
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
+import mu.KotlinLogging
 import org.junit.jupiter.api.Test
-import java.io.File
-import java.util.*
-import kotlin.time.Duration.Companion.milliseconds
 
 private val logger = KotlinLogging.logger {  }
 const val githubLink = "https://github.com/formation-res/pg-docstore"
@@ -46,21 +44,16 @@ val tableName = "docs"
 @Suppress("UNUSED_VARIABLE")
 val readmeMd = sourceGitRepository.md {
     logger.info { "creating connection" }
-    val connection = PostgreSQLConnectionBuilder
-        .createConnectionPool(
-            ConnectionPoolConfiguration(
-                host = "localhost",
-                port = 5432,
-                database = "docstore",
-                username = "postgres",
-                password = "secret",
-            )
-        ).asSuspending
+
+    val connectionPool = connectionPool(
+
+    )
 
     logger.info { "creating store" }
 
     runBlocking {
-        connection.reCreateDocStoreTable(tableName)
+        connectionPool.dropDocStoreTable(tableName)
+        connectionPool.createDocStoreTable(tableName)
     }
     includeMdFile("intro.md")
 
@@ -76,7 +69,7 @@ val readmeMd = sourceGitRepository.md {
         )
 
         val store = DocStore(
-            connection = connection,
+            dataSource = connectionPool(),
             serializationStrategy = MyModel.serializer(),
             tableName = tableName,
             idExtractor = MyModel::id,
@@ -94,19 +87,19 @@ val readmeMd = sourceGitRepository.md {
             """.trimIndent()
 
             example(runExample = false) {
-                val connection = PostgreSQLConnectionBuilder
-                    .createConnectionPool(
-                        ConnectionPoolConfiguration(
-                            host = "localhost",
-                            port = 5432,
-                            database = "docstore",
-                            username = "postgres",
-                            password = "secret",
-                        )
-                    ).asSuspending
-
-                // recreate the docs table
-                connection.reCreateDocStoreTable("docs")
+//                val connection = PostgreSQLConnectionBuilder
+//                    .createConnectionPool(
+//                        ConnectionPoolConfiguration(
+//                            host = "localhost",
+//                            port = 5432,
+//                            database = "docstore",
+//                            username = "postgres",
+//                            password = "secret",
+//                        )
+//                    ).asSuspending
+//
+//                // recreate the docs table
+//                connection.reCreateDocStoreTable("docs")
             }
 
             +"""
@@ -136,7 +129,7 @@ val readmeMd = sourceGitRepository.md {
             """.trimIndent()
             example {
                 val store = DocStore(
-                    connection = connection,
+                    dataSource = connectionPool(),
                     serializationStrategy = MyModel.serializer(),
                     tableName = tableName,
                     idExtractor = MyModel::id,
@@ -182,7 +175,7 @@ val readmeMd = sourceGitRepository.md {
                     // you can only create the same id once
                     try {
                         store.create(doc1)
-                    } catch (e: GenericDatabaseException) {
+                    } catch (e: Exception) {
                         // fails
                         println("id already exists")
                     }
@@ -443,10 +436,6 @@ val readmeMd = sourceGitRepository.md {
     +"""
         This readme is generated with [kotlin4example](https://github.com/jillesvangurp/kotlin4example)
     """.trimIndent()
-    runBlocking {
-        logger.info { "disconnect" }
 
-        connection.disconnect()
-    }
     logger.info { "done" }
 }

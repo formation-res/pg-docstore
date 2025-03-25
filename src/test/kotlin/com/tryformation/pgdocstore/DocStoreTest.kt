@@ -7,6 +7,7 @@ import kotlinx.coroutines.delay
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 
 class DocStoreTest : DbTestBase() {
@@ -66,6 +67,7 @@ class DocStoreTest : DbTestBase() {
         val ds = DocStore(db, TestModelWithId.serializer(), tableName)
         val doc = TestModelWithId("foo")
         ds.create(doc)
+        delay(1.seconds)
         val ts1 = ds.getEntryById(doc.id)!!.updatedAt
         ds.update(doc) {
             it.copy(title = "bar")

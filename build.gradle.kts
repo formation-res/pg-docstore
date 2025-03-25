@@ -1,11 +1,10 @@
 import com.avast.gradle.dockercompose.ComposeExtension
-import org.gradle.api.tasks.testing.logging.TestExceptionFormat
-import org.gradle.api.tasks.testing.logging.TestLogEvent
-import org.jetbrains.dokka.gradle.DokkaTask
-import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import java.net.ConnectException
 import java.net.URI
 import kotlin.math.max
+import org.gradle.api.tasks.testing.logging.TestExceptionFormat
+import org.gradle.api.tasks.testing.logging.TestLogEvent
+import org.jetbrains.dokka.gradle.DokkaTask
 
 plugins {
     kotlin("jvm")
@@ -17,6 +16,13 @@ plugins {
 
 repositories {
     mavenCentral()
+    maven("https://maven.tryformation.com/releases") {
+        content {
+            includeGroup("com.tryformation")
+            includeGroup("com.jillesvangurp")
+            includeGroup("com.github.jillesvangurp")
+        }
+    }
     maven(url = "https://jitpack.io") {
         content {
             includeGroup("com.github.jillesvangurp")
@@ -37,9 +43,15 @@ dependencies {
     implementation(KotlinX.datetime)
     implementation("io.github.microutils:kotlin-logging:_")
 
-    api("com.github.jasync-sql:jasync-postgresql:_")
-    api("io.netty:netty-transport:_")
-    api("io.netty:netty-handler:_")
+    api("com.jillesvangurp:kotlinx-serialization-extensions:_")
+
+    implementation("io.github.microutils:kotlin-logging:_")
+
+    // jdbc+hikaricp
+    api("org.postgresql:postgresql:_")
+
+    // HikariCP Connection Pool
+    api("com.zaxxer:HikariCP:_")
 
     testImplementation(kotlin("test-junit5"))
     testImplementation(Testing.junit.jupiter.api)
