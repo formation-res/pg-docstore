@@ -45,6 +45,5 @@ And then the dependency to commonsMain or main:
 - efficient querying and dumping of the content of the store with database scrolls. We use this for our ETL pipeline.
 - nice Kotlin API with suspend functions, flows, strong typing, etc.
 
-This library builds on jasync-postgresql, which is one of the few database drivers out there that is written in Kotlin
-and that uses non blocking IO. 
+This library builds on JDBC and the postgresql driver for that together with HikariCP and Java's virtual threads.
 

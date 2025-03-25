@@ -16,12 +16,8 @@ interface IDocStore<T : Any> {
      * If you want to do multiple docstore operations in a transaction, use transact. Note most DocStore operations
      * do not have their own transaction (except scrolling queries).
      *
-     * It creates a new DocStore with a connection from jasync's inTransaction function that
-     * does the appropriate things to ensure transactions don't overlap.
-     *
-     * Note, jasync and transactions are tricky because you cannot assume the connection from a thread pool is not
-     * shared between threads. That's why inTransaction gives you a new connection that isn't shared for the duration
-     * of the transaction. This function in turn uses that to give you a DocStore instance that uses that connection.
+     * It creates a new DocStore with the connection that will be used during the connection.
+     * It disables autocommit and commits/rolls back as appropriate.
      */
     suspend fun <R> transact(block: suspend (IDocStore<T>) -> R): R
 
@@ -40,7 +36,7 @@ interface IDocStore<T : Any> {
     ): DocStoreEntry
 
     /**
-     * Create a documen and use the specified [id] as the id.
+     * Create a document and use the specified [id] as the id.
      *
      * Optionally, you can override the [timestamp] and specify that the document should be
      * overwritten if it already exists with [onConflictUpdate]

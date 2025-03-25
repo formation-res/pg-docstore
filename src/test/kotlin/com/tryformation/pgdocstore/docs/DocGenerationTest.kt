@@ -18,7 +18,7 @@ import kotlinx.serialization.Serializable
 import mu.KotlinLogging
 import org.junit.jupiter.api.Test
 
-private val logger = KotlinLogging.logger {  }
+private val logger = KotlinLogging.logger { }
 const val githubLink = "https://github.com/formation-res/pg-docstore"
 
 val sourceGitRepository = SourceRepository(
@@ -81,25 +81,19 @@ val readmeMd = sourceGitRepository.md {
 
         subSection("Connecting to the database") {
             +"""
-                Pg-docstore uses jasync-postgresql to connect to Postgresql. Unlike many other
-                database frameworks, this framework uses non blocking IO and is co-routine friendly;
-                and largely written in Kotlin too. This makes it a perfect choice for pg-docstore.
+                Pg-docstore uses the jdbc posgresql driver to connect to Postgresql and virtual threads to make that non blocking.                 
             """.trimIndent()
 
             example(runExample = false) {
-//                val connection = PostgreSQLConnectionBuilder
-//                    .createConnectionPool(
-//                        ConnectionPoolConfiguration(
-//                            host = "localhost",
-//                            port = 5432,
-//                            database = "docstore",
-//                            username = "postgres",
-//                            password = "secret",
-//                        )
-//                    ).asSuspending
-//
-//                // recreate the docs table
-//                connection.reCreateDocStoreTable("docs")
+                // uses HikariCP but should work with any postgres datasource
+                val connectionPool = connectionPool(
+                    jdbcUrl = "jdbc:postgresql://localhost:5432/docstore",
+                    username = "postgres",
+                    password = "secret",
+                )
+                connectionPool.dropDocStoreTable(tableName)
+                connectionPool.createDocStoreTable(tableName)
+
             }
 
             +"""
@@ -287,9 +281,10 @@ val readmeMd = sourceGitRepository.md {
             example {
 
                 // documents are sorted by recency
-                println("five most recent documents: ${
-                    store.documentsByRecency(limit = 5).map { it.title }
-                }")
+                println(
+                    "five most recent documents: ${
+                        store.documentsByRecency(limit = 5).map { it.title }
+                    }")
                 // we can also scroll through the entire table
                 // and count the number of documents in the flow
                 println(
@@ -359,11 +354,8 @@ val readmeMd = sourceGitRepository.md {
                 
                 The `transact` function creates a new docstore with it's own isolated connection and the same parameters 
                 as its parent. The isolated connection is used for the duration of 
-                the transaction and exclusive to your code block. This prevents other parts of your code from sending sql commands on the connection. 
-                
-                If you are used to blocking IO frameworks this may be a bit surprising. However, we need this 
-                because connections in jasync are shared and queries are non blocking. Without using an isolated connection, 
-                other parts of your code might run their own queries in your transaction, which of course is not desirable.
+                the transaction and exclusive to your code block. It will commit / rollback as needed. 
+                                 
             """.trimIndent()
 
             example {
