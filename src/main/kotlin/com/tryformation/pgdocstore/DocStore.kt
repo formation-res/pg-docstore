@@ -4,13 +4,10 @@ import com.jillesvangurp.serializationext.DEFAULT_JSON
 
 import java.sql.Connection
 import java.sql.Timestamp
-import java.util.concurrent.Executors
 import javax.sql.DataSource
 import kotlin.reflect.KProperty
 import kotlin.time.Duration
-import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineName
-import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.map
@@ -20,28 +17,11 @@ import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
 import mu.KotlinLogging
 
-val virtualThreadDispatcher: CoroutineDispatcher = Executors.newVirtualThreadPerTaskExecutor().asCoroutineDispatcher()
 
 private val logger = KotlinLogging.logger { }
 
 fun Instant.toSqlTimestamp(): Timestamp =
     Timestamp.from(java.time.Instant.ofEpochMilli(this.toEpochMilliseconds()))
-private suspend fun <T> DataSource.withTransaction(block: suspend (Connection) -> T): T {
-    return withContext(virtualThreadDispatcher + CoroutineName("database")) {
-        this@withTransaction.connection.use { conn ->
-            try {
-                conn.autoCommit = false
-                val result = block(conn)
-                conn.commit()
-                result
-            } catch (e: Exception) {
-                logger.error(e) { "Error during transaction in: ${e.message}" }
-                conn.rollback()
-                throw e
-            }
-        }
-    }
-}
 
 class DocStore<T : Any>(
     private val dataSource: DataSource,
@@ -59,23 +39,19 @@ class DocStore<T : Any>(
     private val connection: Connection? = null,
 
     ) : IDocStore<T> {
-    private suspend fun <T> withConnection(block: suspend (Connection) -> T): T {
+    private suspend fun <T> withDocStoreConnection(block: suspend (Connection) -> T): T {
         return if (connection != null) {
             block(connection)
-        } else
-            withContext(virtualThreadDispatcher + CoroutineName("database")) {
-                dataSource.connection.use { conn ->
-                    block.invoke(conn)
-                }
-            }
+        } else {
+            dataSource.withConnection(block)
+        }
     }
-
 
     override suspend fun <R> transact(block: suspend (IDocStore<T>) -> R): R {
         // already in transaction
         return if (connection != null) block(this)
         // create a new transaction
-        else withConnection { conn ->
+        else withDocStoreConnection { conn ->
             try {
                 conn.autoCommit = false
                 val result = block(
@@ -113,7 +89,7 @@ class DocStore<T : Any>(
         val text = textExtractor.invoke(doc)
         if (logging) logger.info { "$tableName creating $id" }
 
-        return withConnection { connection ->
+        return withDocStoreConnection { connection ->
 
             connection.prepareStatement(
                 """
@@ -149,7 +125,7 @@ class DocStore<T : Any>(
     }
 
     override suspend fun getById(id: String): T? {
-        return withConnection { conn ->
+        return withDocStoreConnection { conn ->
             conn.prepareStatement(
                 """
                     select ${DocStoreEntry::json.name} from $tableName where id = ?
@@ -172,7 +148,7 @@ class DocStore<T : Any>(
     override suspend fun multiGetById(ids: List<String>): List<T> {
         if (ids.isEmpty()) return emptyList()
 
-        return withConnection { connection ->
+        return withDocStoreConnection { connection ->
             val placeholders = ids.joinToString(",") { "?" }
             val sql = """
                 SELECT ${DocStoreEntry::json.name} 
@@ -200,7 +176,7 @@ class DocStore<T : Any>(
     }
 
     override suspend fun getEntryById(id: String): DocStoreEntry? {
-        return withConnection { connection ->
+        return withDocStoreConnection { connection ->
             connection.prepareStatement(
                 """
             SELECT id, created_at, updated_at, json, tags, text 
@@ -233,7 +209,7 @@ class DocStore<T : Any>(
     override suspend fun multiGetEntryById(ids: List<String>): List<DocStoreEntry> {
         if (ids.isEmpty()) return emptyList()
 
-        return withConnection { connection ->
+        return withDocStoreConnection { connection ->
             val placeholders = ids.joinToString(",") { "?" }
             val sql = """
             SELECT id, created_at, updated_at, json, tags, text 
@@ -330,7 +306,7 @@ class DocStore<T : Any>(
     }
 
     override suspend fun delete(id: String) {
-        withConnection { connection ->
+        withDocStoreConnection { connection ->
             connection.prepareStatement(
                 """
             DELETE FROM $tableName WHERE id = ?
@@ -411,7 +387,7 @@ class DocStore<T : Any>(
     override suspend fun insertList(chunk: List<Pair<String, T>>, timestamp: Instant) {
         if (chunk.isEmpty()) return
 
-        withConnection { connection ->
+        withDocStoreConnection { connection ->
             val baseSql = """
             INSERT INTO $tableName (id, json, tags, created_at, updated_at, text)
             VALUES
@@ -452,7 +428,7 @@ class DocStore<T : Any>(
     }
 
     override suspend fun count(): Long {
-        return withConnection { connection ->
+        return withDocStoreConnection { connection ->
             connection.prepareStatement(
                 """
             SELECT COUNT(*) FROM $tableName
@@ -480,7 +456,7 @@ class DocStore<T : Any>(
     ): List<T> {
         val sql =
             constructQuery(tags, query, tagsClauseOperator, whereClauseOperator, limit, offset, similarityThreshold)
-        return withConnection { connection ->
+        return withDocStoreConnection { connection ->
             connection.prepareStatement(sql).use { statement ->
                 setQueryParams(statement, tags, query)
                 statement.executeQuery().use { rs ->
@@ -505,7 +481,7 @@ class DocStore<T : Any>(
     ): List<DocStoreEntry> {
         val sql =
             constructQuery(tags, query, tagsClauseOperator, whereClauseOperator, limit, offset, similarityThreshold)
-        return withConnection { connection ->
+        return withDocStoreConnection { connection ->
             connection.prepareStatement(sql).use { statement ->
                 setQueryParams(statement, tags, query)
                 statement.executeQuery().use { rs ->
@@ -580,7 +556,7 @@ class DocStore<T : Any>(
         fetchSize: Int,
         rowProcessor: (java.sql.ResultSet) -> R
     ): Flow<R> = channelFlow {
-        withConnection { connection ->
+        withDocStoreConnection { connection ->
             connection.prepareStatement(query).use { ps ->
                 ps.fetchSize = fetchSize
                 params.forEachIndexed { index, param ->
