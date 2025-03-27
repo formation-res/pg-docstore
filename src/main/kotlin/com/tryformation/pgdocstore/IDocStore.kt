@@ -6,18 +6,28 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 
+/**
+ * Specifies how multiple conditions are combined in queries.
+ * Use [AND] for logical AND, [OR] for logical OR.
+ */
 enum class BooleanOperator {
     OR,
     AND
 }
 
+/**
+ * Interface for the docstore to facilitate alternate implementations. For different
+ * databases or using different database libraries to connect (an earlier version actually used jasync postgresql)
+ */
 interface IDocStore<T : Any> {
     /**
-     * If you want to do multiple docstore operations in a transaction, use transact. Note most DocStore operations
-     * do not have their own transaction (except scrolling queries).
+     * Executes the given [block] within a database transaction.
      *
-     * It creates a new DocStore with the connection that will be used during the connection.
-     * It disables autocommit and commits/rolls back as appropriate.
+     * Returns the result of [block]. If an exception is thrown, the transaction is rolled back.
+     * If already inside a transaction, reuses the current one.
+     *
+     * @param block A suspending function that takes a transactional version of [IDocStore].
+     * @return The result of the block.
      */
     suspend fun <R> transact(block: suspend (IDocStore<T>) -> R): R
 
@@ -250,16 +260,6 @@ interface IDocStore<T : Any> {
         fetchSize: Int = 100,
         similarityThreshold: Double = 0.1,
     ): Flow<DocStoreEntry>
-
-    fun constructQuery(
-        tags: List<String>,
-        query: String?,
-        tagsClauseOperator: BooleanOperator = BooleanOperator.AND,
-        whereClauseOperator: BooleanOperator = BooleanOperator.AND,
-        limit: Int? = null,
-        offset: Int = 0,
-        similarityThreshold: Double = 0.01
-    ): String
 
     /**
      * Updates all documents in the store and re-runs all the extract functions.

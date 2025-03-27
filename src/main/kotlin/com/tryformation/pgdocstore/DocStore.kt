@@ -22,10 +22,26 @@ import mu.KotlinLogging
 
 val virtualThreadDispatcher: CoroutineDispatcher = Executors.newVirtualThreadPerTaskExecutor().asCoroutineDispatcher()
 
-private val logger = KotlinLogging.logger {  }
+private val logger = KotlinLogging.logger { }
 
 fun Instant.toSqlTimestamp(): Timestamp =
     Timestamp.from(java.time.Instant.ofEpochMilli(this.toEpochMilliseconds()))
+private suspend fun <T> DataSource.withTransaction(block: suspend (Connection) -> T): T {
+    return withContext(virtualThreadDispatcher + CoroutineName("database")) {
+        this@withTransaction.connection.use { conn ->
+            try {
+                conn.autoCommit = false
+                val result = block(conn)
+                conn.commit()
+                result
+            } catch (e: Exception) {
+                logger.error(e) { "Error during transaction in: ${e.message}" }
+                conn.rollback()
+                throw e
+            }
+        }
+    }
+}
 
 class DocStore<T : Any>(
     private val dataSource: DataSource,
@@ -54,27 +70,10 @@ class DocStore<T : Any>(
             }
     }
 
-    private suspend fun <T> DataSource.withTransaction(block: suspend (Connection) -> T): T {
-        return withContext(virtualThreadDispatcher + CoroutineName("database")) {
-            this@withTransaction.connection.use { conn ->
-                try {
-                    conn.autoCommit = false
-                    val result = block(conn)
-                    conn.commit()
-                    result
-                } catch (e: Exception) {
-                    logger.error(e) { "Error during transaction in $tableName: ${e.message}" }
-                    conn.rollback()
-                    throw e
-                }
-            }
-        }
-    }
-
 
     override suspend fun <R> transact(block: suspend (IDocStore<T>) -> R): R {
         // already in transaction
-        return if(connection!=null) block(this)
+        return if (connection != null) block(this)
         // create a new transaction
         else withConnection { conn ->
             try {
@@ -112,9 +111,9 @@ class DocStore<T : Any>(
         val serialized = json.encodeToString(serializationStrategy, doc)
         val tags = tagExtractor.invoke(doc)
         val text = textExtractor.invoke(doc)
-        if(logging) logger.info { "$tableName creating $id" }
+        if (logging) logger.info { "$tableName creating $id" }
 
-        return withConnection {connection ->
+        return withConnection { connection ->
 
             connection.prepareStatement(
                 """
@@ -144,18 +143,19 @@ class DocStore<T : Any>(
             }
 
             DocStoreEntry(id, timestamp, timestamp, serialized, tags, text).also {
-                if(logging) logger.info { "$tableName created $it" }
+                if (logging) logger.info { "$tableName created $it" }
             }
         }
     }
 
     override suspend fun getById(id: String): T? {
-        return withConnection {conn ->
+        return withConnection { conn ->
             conn.prepareStatement(
                 """
                     select ${DocStoreEntry::json.name} from $tableName where id = ?
-                """.trimIndent()).use {statement ->
-                    statement.setString(1,id)
+                """.trimIndent()
+            ).use { statement ->
+                statement.setString(1, id)
                 statement.executeQuery().use { resultSet ->
                     if (resultSet.next()) {
                         val jsonString = resultSet.getString(DocStoreEntry::json.name)
@@ -346,7 +346,6 @@ class DocStore<T : Any>(
         }
     }
 
-
     override suspend fun bulkInsert(
         flow: Flow<T>,
         chunkSize: Int, delayMillis: Duration
@@ -386,14 +385,14 @@ class DocStore<T : Any>(
     }
 
     override suspend fun bulkInsertWithId(flow: Flow<Pair<String, T>>, chunkSize: Int, delayMillis: Duration) {
-        if(logging) logger.info { "$tableName done bulk inserting" }
+        if (logging) logger.info { "$tableName done bulk inserting" }
 
-        transact {tDocstore ->
+        transact { tDocstore ->
             flow.chunked(chunkSize = chunkSize, delayMillis = delayMillis).collect { chunk ->
                 tDocstore.insertList(chunk)
             }
         }
-        if(logging) logger.info { "$tableName done bulk inserting" }
+        if (logging) logger.info { "$tableName done bulk inserting" }
 
     }
 
@@ -479,7 +478,8 @@ class DocStore<T : Any>(
         offset: Int,
         similarityThreshold: Double
     ): List<T> {
-        val sql = constructQuery(tags, query, tagsClauseOperator, whereClauseOperator, limit, offset, similarityThreshold)
+        val sql =
+            constructQuery(tags, query, tagsClauseOperator, whereClauseOperator, limit, offset, similarityThreshold)
         return withConnection { connection ->
             connection.prepareStatement(sql).use { statement ->
                 setQueryParams(statement, tags, query)
@@ -503,7 +503,8 @@ class DocStore<T : Any>(
         offset: Int,
         similarityThreshold: Double
     ): List<DocStoreEntry> {
-        val sql = constructQuery(tags, query, tagsClauseOperator, whereClauseOperator, limit, offset, similarityThreshold)
+        val sql =
+            constructQuery(tags, query, tagsClauseOperator, whereClauseOperator, limit, offset, similarityThreshold)
         return withConnection { connection ->
             connection.prepareStatement(sql).use { statement ->
                 setQueryParams(statement, tags, query)
@@ -546,7 +547,7 @@ class DocStore<T : Any>(
         fetchSize
     ) { rs -> toEntry(rs) }
 
-    override fun constructQuery(
+    private fun constructQuery(
         tags: List<String>,
         query: String?,
         tagsClauseOperator: BooleanOperator,
@@ -562,12 +563,14 @@ class DocStore<T : Any>(
             ""
         } else {
             "WHERE " + listOfNotNull(
-                tags.takeIf { it.isNotEmpty() }?.joinToString(" $tagsClauseOperator ") { "? = ANY(tags)" }?.let { "($it)" },
+                tags.takeIf { it.isNotEmpty() }?.joinToString(" $tagsClauseOperator ") { "? = ANY(tags)" }
+                    ?.let { "($it)" },
                 query?.takeIf { it.isNotBlank() }?.let { "similarity(text, ?) > $similarityThreshold" }
             ).joinToString(" $whereClauseOperator ")
         }
         val limitClause = limit?.let { " LIMIT $it" + if (offset > 0) " OFFSET $offset" else "" } ?: ""
-        val orderClause = if (query.isNullOrBlank()) "ORDER BY updated_at DESC" else "ORDER BY rank DESC, updated_at DESC"
+        val orderClause =
+            if (query.isNullOrBlank()) "ORDER BY updated_at DESC" else "ORDER BY rank DESC, updated_at DESC"
         return "SELECT *$rankSelect FROM $tableName $whereClause $orderClause$limitClause"
     }
 
@@ -594,7 +597,8 @@ class DocStore<T : Any>(
 
     override suspend fun reExtract() {
         bulkInsert(documentsByRecencyScrolling(emptyList(), null, BooleanOperator.AND, BooleanOperator.AND, 0.5, 100))
-    }}
+    }
+}
 
 private fun setQueryParams(statement: java.sql.PreparedStatement, tags: List<String>, query: String?) {
     var index = 1
