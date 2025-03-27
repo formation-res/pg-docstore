@@ -20,10 +20,12 @@ import kotlin.time.Duration.Companion.minutes
 @Execution(ExecutionMode.CONCURRENT)
 open class DbTestBase {
     lateinit var tableName : String
+
     @BeforeAll
     fun beforeAll() = coRun {
         // all tests in the same class have the same table
         tableName = "docs_${Random.nextULong()}"
+
         db.createDocStoreTable(tableName)
     }
 
@@ -41,5 +43,7 @@ open class DbTestBase {
     }
 }
 
-val db by lazy { suspendingConnection() }
+val db by lazy {
+    connectionPool()
+}
 

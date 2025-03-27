@@ -47,32 +47,25 @@ And then the dependency to commonsMain or main:
 - efficient querying and dumping of the content of the store with database scrolls. We use this for our ETL pipeline.
 - nice Kotlin API with suspend functions, flows, strong typing, etc.
 
-This library builds on jasync-postgresql, which is one of the few database drivers out there that is written in Kotlin
-and that uses non blocking IO. 
+This library builds on JDBC and the postgresql driver for that together with HikariCP and Java's virtual threads.
 
 
 ## Usage
 
 ### Connecting to the database
 
-Pg-docstore uses jasync-postgresql to connect to Postgresql. Unlike many other
-database frameworks, this framework uses non blocking IO and is co-routine friendly;
-and largely written in Kotlin too. This makes it a perfect choice for pg-docstore.
+Pg-docstore uses the jdbc posgresql driver to connect to Postgresql and virtual threads to make that non blocking.                 
 
 ```kotlin
-val connection = PostgreSQLConnectionBuilder
-  .createConnectionPool(
-    ConnectionPoolConfiguration(
-      host = "localhost",
-      port = 5432,
-      database = "docstore",
-      username = "postgres",
-      password = "secret",
-    )
-  ).asSuspending
+// uses HikariCP but should work with any postgres datasource
+val connectionPool = connectionPool(
+  jdbcUrl = "jdbc:postgresql://localhost:5432/docstore",
+  username = "postgres",
+  password = "secret",
+)
+connectionPool.dropDocStoreTable(tableName)
+connectionPool.createDocStoreTable(tableName)
 
-// recreate the docs table
-connection.reCreateDocStoreTable("docs")
 ```
 
 The `reCreateDocStoreSchema` call applies the docstore table schema to a docs table and re-creates that.
@@ -96,9 +89,9 @@ Using this data class, we can now create a store.
 
 ```kotlin
 val store = DocStore(
-  connection = connection,
+  dataSource = connectionPool(),
   serializationStrategy = MyModel.serializer(),
-  tableName = "docs",
+  tableName = tableName,
   idExtractor = MyModel::id,
   // optional, used for text search
   textExtractor = {
@@ -138,7 +131,7 @@ store.getById(doc1.id)?.let {
 // you can only create the same id once
 try {
   store.create(doc1)
-} catch (e: GenericDatabaseException) {
+} catch (e: Exception) {
   // fails
   println("id already exists")
 }
@@ -250,9 +243,10 @@ out of the store.
 ```kotlin
 
 // documents are sorted by recency
-println("five most recent documents: ${
-  store.documentsByRecency(limit = 5).map { it.title }
-}")
+println(
+  "five most recent documents: ${
+    store.documentsByRecency(limit = 5).map { it.title }
+  }")
 // we can also scroll through the entire table
 // and count the number of documents in the flow
 println(
@@ -329,11 +323,7 @@ you can of course control this if you need to, e.g. modify multiple documents in
 
 The `transact` function creates a new docstore with it's own isolated connection and the same parameters 
 as its parent. The isolated connection is used for the duration of 
-the transaction and exclusive to your code block. This prevents other parts of your code from sending sql commands on the connection. 
-
-If you are used to blocking IO frameworks this may be a bit surprising. However, we need this 
-because connections in jasync are shared and queries are non blocking. Without using an isolated connection, 
-other parts of your code might run their own queries in your transaction, which of course is not desirable.
+the transaction and exclusive to your code block. It will commit / rollback as needed. 
 
 ```kotlin
 store.transact { tStore ->

@@ -13,7 +13,7 @@ class TaggingTest : DbTestBase() {
     @Test
     fun shouldQueryByTag() = coRun {
         val ds = DocStore(
-            connection = db,
+            dataSource = db,
             serializationStrategy = TaggedModel.serializer(),
             tableName = tableName,
             tagExtractor = TaggedModel::tags,

@@ -2,23 +2,23 @@
 
 package com.tryformation.pgdocstore.docs
 
-import com.github.jasync.sql.db.ConnectionPoolConfiguration
-import com.github.jasync.sql.db.asSuspending
-import com.github.jasync.sql.db.postgresql.PostgreSQLConnectionBuilder
-import com.github.jasync.sql.db.postgresql.exceptions.GenericDatabaseException
 import com.jillesvangurp.kotlin4example.SourceRepository
 import com.tryformation.pgdocstore.DocStore
-import com.tryformation.pgdocstore.reCreateDocStoreTable
+import com.tryformation.pgdocstore.connectionPool
+import com.tryformation.pgdocstore.createDocStoreTable
+import com.tryformation.pgdocstore.dropDocStoreTable
+import java.io.File
+import java.util.UUID
+import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.count
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
+import mu.KotlinLogging
 import org.junit.jupiter.api.Test
-import java.io.File
-import java.util.*
-import kotlin.time.Duration.Companion.milliseconds
 
+private val logger = KotlinLogging.logger { }
 const val githubLink = "https://github.com/formation-res/pg-docstore"
 
 val sourceGitRepository = SourceRepository(
@@ -39,25 +39,27 @@ class DocGenerationTest {
     }
 }
 
+val tableName = "docs"
+
 @Suppress("UNUSED_VARIABLE")
 val readmeMd = sourceGitRepository.md {
+    logger.info { "creating connection" }
+
+    val connectionPool = connectionPool(
+
+    )
+
+    logger.info { "creating store" }
+
+    runBlocking {
+        connectionPool.dropDocStoreTable(tableName)
+        connectionPool.createDocStoreTable(tableName)
+    }
     includeMdFile("intro.md")
 
-    section("Usage") {
-        val connection = PostgreSQLConnectionBuilder
-            .createConnectionPool(
-                ConnectionPoolConfiguration(
-                    host = "localhost",
-                    port = 5432,
-                    database = "docstore",
-                    username = "postgres",
-                    password = "secret",
-                )
-            ).asSuspending
+    logger.info { "usage" }
 
-        runBlocking {
-            connection.reCreateDocStoreTable("docs")
-        }
+    section("Usage") {
         @Serializable
         data class MyModel(
             val title: String,
@@ -67,49 +69,39 @@ val readmeMd = sourceGitRepository.md {
         )
 
         val store = DocStore(
-            connection = connection,
+            dataSource = connectionPool(),
             serializationStrategy = MyModel.serializer(),
-            tableName = "docs",
+            tableName = tableName,
             idExtractor = MyModel::id,
             // optional, used for text search
-            textExtractor = {
-                "${it.title} ${it.description}"
-            },
-            // optional, used for tag search
-            tagExtractor = {
-                it.categories
-            }
+            // FIXME  using lambdas here  somehow hangs the transaction - co-routine weirdness?!
+            textExtractor = MyModel::title,
+            tagExtractor = MyModel::categories
         )
-
-
 
         subSection("Connecting to the database") {
             +"""
-                Pg-docstore uses jasync-postgresql to connect to Postgresql. Unlike many other
-                database frameworks, this framework uses non blocking IO and is co-routine friendly;
-                and largely written in Kotlin too. This makes it a perfect choice for pg-docstore.
+                Pg-docstore uses the jdbc posgresql driver to connect to Postgresql and virtual threads to make that non blocking.                 
             """.trimIndent()
 
-            example {
-                val connection = PostgreSQLConnectionBuilder
-                    .createConnectionPool(
-                        ConnectionPoolConfiguration(
-                            host = "localhost",
-                            port = 5432,
-                            database = "docstore",
-                            username = "postgres",
-                            password = "secret",
-                        )
-                    ).asSuspending
+            example(runExample = false) {
+                // uses HikariCP but should work with any postgres datasource
+                val connectionPool = connectionPool(
+                    jdbcUrl = "jdbc:postgresql://localhost:5432/docstore",
+                    username = "postgres",
+                    password = "secret",
+                )
+                connectionPool.dropDocStoreTable(tableName)
+                connectionPool.createDocStoreTable(tableName)
 
-                // recreate the docs table
-                connection.reCreateDocStoreTable("docs")
             }
 
             +"""
                 The `reCreateDocStoreSchema` call applies the docstore table schema to a docs table and re-creates that.
             """.trimIndent()
         }
+        logger.info { "store creation" }
+
         subSection("Creating a store") {
             +"""
                 We'll use the following simple data class as our model. It's annotated with `@Serializable`. This enables
@@ -131,9 +123,9 @@ val readmeMd = sourceGitRepository.md {
             """.trimIndent()
             example {
                 val store = DocStore(
-                    connection = connection,
+                    dataSource = connectionPool(),
                     serializationStrategy = MyModel.serializer(),
-                    tableName = "docs",
+                    tableName = tableName,
                     idExtractor = MyModel::id,
                     // optional, used for text search
                     textExtractor = {
@@ -160,65 +152,71 @@ val readmeMd = sourceGitRepository.md {
             """.trimIndent()
         }
 
+        logger.info { "CRUD" }
+
         subSection("Create, read, update, and delete (CRUD) and querying") {
-            example {
+            runCatching {
+                example {
 
-                // do some crud
-                val doc1 = MyModel("Number 1", "a first document", categories = listOf("foo"))
-                store.create(doc1)
-
-                store.getById(doc1.id)?.let {
-                    println("Retrieved ${it.title}")
-                }
-
-                // you can only create the same id once
-                try {
+                    // do some crud
+                    val doc1 = MyModel("Number 1", "a first document", categories = listOf("foo"))
                     store.create(doc1)
-                } catch (e: GenericDatabaseException) {
-                    // fails
-                    println("id already exists")
-                }
 
-                // you can force the conflict be handled
-                // by overwriting the original
-                store.create(
-                    doc1.copy(title = "Numero Uno"),
-                    onConflictUpdate = true
-                )
+                    store.getById(doc1.id)?.let {
+                        println("Retrieved ${it.title}")
+                    }
 
-                // now it is changed
-                store.getById(doc1.id)?.let {
-                    println("Changed title ${it.title}")
-                }
+                    // you can only create the same id once
+                    try {
+                        store.create(doc1)
+                    } catch (e: Exception) {
+                        // fails
+                        println("id already exists")
+                    }
 
-                // This is a better way to do updates
-                // update by id and modify the retrieved original
-                store.update(doc1.id) { original ->
-                    // modify the original
-                    original.copy(title = "Number One")
-                }
+                    // you can force the conflict be handled
+                    // by overwriting the original
+                    store.create(
+                        doc1.copy(title = "Numero Uno"),
+                        onConflictUpdate = true
+                    )
 
-                // you can also do it like this
-                store.update(doc1) { original ->
-                    // still fetches the original
-                    original.copy(title = "This is the one")
-                }
+                    // now it is changed
+                    store.getById(doc1.id)?.let {
+                        println("Changed title ${it.title}")
+                    }
 
-                store.getById(doc1.id)?.let {
-                    println("Now it is ${it.title}")
-                }
+                    // This is a better way to do updates
+                    // update by id and modify the retrieved original
+                    store.update(doc1.id) { original ->
+                        // modify the original
+                        original.copy(title = "Number One")
+                    }
 
-                // delete a document
-                store.delete(doc1)
-                println("now it's gone: ${store.getById(doc1.id)}")
+                    // you can also do it like this
+                    store.update(doc1) { original ->
+                        // still fetches the original
+                        original.copy(title = "This is the one")
+                    }
 
-            }.let {
-                +"""
+                    store.getById(doc1.id)?.let {
+                        println("Now it is ${it.title}")
+                    }
+
+                    // delete a document
+                    store.delete(doc1)
+                    println("now it's gone: ${store.getById(doc1.id)}")
+
+                }.let {
+                    +"""
                     This prints:
                 """.trimIndent()
-                mdCodeBlock(it.stdOut, "text")
+                    mdCodeBlock(it.stdOut, "text")
+                }
             }
         }
+        logger.info { "mget" }
+
         subSection("Multi-get") {
             +"""
                 You can get multiple documents in one go like this:
@@ -268,6 +266,8 @@ val readmeMd = sourceGitRepository.md {
                 }
             }
         }
+        logger.info { "querying" }
+
         subSection("Querying") {
             +"""
                 Querying is a bit limited in pg-docstore; it's meant to 
@@ -281,9 +281,10 @@ val readmeMd = sourceGitRepository.md {
             example {
 
                 // documents are sorted by recency
-                println("five most recent documents: ${
-                    store.documentsByRecency(limit = 5).map { it.title }
-                }")
+                println(
+                    "five most recent documents: ${
+                        store.documentsByRecency(limit = 5).map { it.title }
+                    }")
                 // we can also scroll through the entire table
                 // and count the number of documents in the flow
                 println(
@@ -344,6 +345,8 @@ val readmeMd = sourceGitRepository.md {
                 mdCodeBlock(it.stdOut, "text")
             }
         }
+        logger.info { "transactions" }
+
         subSection("Transactions") {
             +"""
                 Most operations in the docstore are single sql statements and don't use a transaction. However,
@@ -351,11 +354,8 @@ val readmeMd = sourceGitRepository.md {
                 
                 The `transact` function creates a new docstore with it's own isolated connection and the same parameters 
                 as its parent. The isolated connection is used for the duration of 
-                the transaction and exclusive to your code block. This prevents other parts of your code from sending sql commands on the connection. 
-                
-                If you are used to blocking IO frameworks this may be a bit surprising. However, we need this 
-                because connections in jasync are shared and queries are non blocking. Without using an isolated connection, 
-                other parts of your code might run their own queries in your transaction, which of course is not desirable.
+                the transaction and exclusive to your code block. It will commit / rollback as needed. 
+                                 
             """.trimIndent()
 
             example {
@@ -429,4 +429,5 @@ val readmeMd = sourceGitRepository.md {
         This readme is generated with [kotlin4example](https://github.com/jillesvangurp/kotlin4example)
     """.trimIndent()
 
+    logger.info { "done" }
 }
