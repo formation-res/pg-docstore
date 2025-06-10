@@ -1,17 +1,15 @@
 package com.tryformation.pgdocstore
 
 import com.jillesvangurp.serializationext.DEFAULT_JSON
-
 import java.sql.Connection
+import java.sql.PreparedStatement
 import java.sql.Timestamp
 import javax.sql.DataSource
 import kotlin.reflect.KProperty
 import kotlin.time.Duration
-import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.withContext
 import kotlinx.datetime.Instant
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
@@ -452,13 +450,25 @@ class DocStore<T : Any>(
         whereClauseOperator: BooleanOperator,
         limit: Int,
         offset: Int,
-        similarityThreshold: Double
+        similarityThreshold: Double,
+        updatedAtAfter: Instant?,
+        updatedAtBefore: Instant?,
     ): List<T> {
         val sql =
-            constructQuery(tags, query, tagsClauseOperator, whereClauseOperator, limit, offset, similarityThreshold)
+            constructQuery(
+                tags = tags,
+                query = query,
+                tagsClauseOperator = tagsClauseOperator,
+                whereClauseOperator = whereClauseOperator,
+                limit = limit,
+                offset = offset,
+                similarityThreshold = similarityThreshold,
+                updatedAtAfter = updatedAtAfter,
+                updatedAtBefore = updatedAtBefore
+            )
         return withDocStoreConnection { connection ->
             connection.prepareStatement(sql).use { statement ->
-                setQueryParams(statement, tags, query)
+                setQueryParams(statement, tags, query, updatedAtAfter, updatedAtBefore)
                 statement.executeQuery().use { rs ->
                     val result = mutableListOf<T>()
                     while (rs.next()) {
@@ -477,13 +487,25 @@ class DocStore<T : Any>(
         whereClauseOperator: BooleanOperator,
         limit: Int,
         offset: Int,
-        similarityThreshold: Double
+        similarityThreshold: Double,
+        updatedAtAfter: Instant?,
+        updatedAtBefore: Instant?,
     ): List<DocStoreEntry> {
         val sql =
-            constructQuery(tags, query, tagsClauseOperator, whereClauseOperator, limit, offset, similarityThreshold)
+            constructQuery(
+                tags = tags,
+                query = query,
+                tagsClauseOperator = tagsClauseOperator,
+                whereClauseOperator = whereClauseOperator,
+                limit = limit,
+                offset = offset,
+                similarityThreshold = similarityThreshold,
+                updatedAtAfter = updatedAtAfter,
+                updatedAtBefore = updatedAtBefore
+            )
         return withDocStoreConnection { connection ->
             connection.prepareStatement(sql).use { statement ->
-                setQueryParams(statement, tags, query)
+                setQueryParams(statement, tags, query, updatedAtAfter, updatedAtBefore)
                 statement.executeQuery().use { rs ->
                     val result = mutableListOf<DocStoreEntry>()
                     while (rs.next()) {
@@ -501,9 +523,21 @@ class DocStore<T : Any>(
         tagsClauseOperator: BooleanOperator,
         whereClauseOperator: BooleanOperator,
         similarityThreshold: Double,
-        fetchSize: Int
+        fetchSize: Int,
+        updatedAtAfter: Instant?,
+        updatedAtBefore: Instant?,
     ): Flow<T> = queryFlow(
-        constructQuery(tags, query, tagsClauseOperator, whereClauseOperator, null, 0, similarityThreshold),
+        constructQuery(
+            tags = tags,
+            query = query,
+            tagsClauseOperator = tagsClauseOperator,
+            whereClauseOperator = whereClauseOperator,
+            limit = null,
+            offset = 0,
+            similarityThreshold = similarityThreshold,
+            updatedAtAfter = updatedAtAfter,
+            updatedAtBefore = updatedAtBefore
+        ),
         tags + listOfNotNull(query),
         fetchSize
     ) { rs ->
@@ -516,9 +550,21 @@ class DocStore<T : Any>(
         tagsClauseOperator: BooleanOperator,
         whereClauseOperator: BooleanOperator,
         fetchSize: Int,
-        similarityThreshold: Double
+        similarityThreshold: Double,
+        updatedAtAfter: Instant?,
+        updatedAtBefore: Instant?,
     ): Flow<DocStoreEntry> = queryFlow(
-        constructQuery(tags, query, tagsClauseOperator, whereClauseOperator, null, 0, similarityThreshold),
+        constructQuery(
+            tags = tags,
+            query = query,
+            tagsClauseOperator = tagsClauseOperator,
+            whereClauseOperator = whereClauseOperator,
+            limit = null,
+            offset = 0,
+            similarityThreshold = similarityThreshold,
+            updatedAtAfter = updatedAtAfter,
+            updatedAtBefore = updatedAtBefore
+        ),
         tags + listOfNotNull(query),
         fetchSize
     ) { rs -> toEntry(rs) }
@@ -530,24 +576,39 @@ class DocStore<T : Any>(
         whereClauseOperator: BooleanOperator,
         limit: Int?,
         offset: Int,
-        similarityThreshold: Double
+        similarityThreshold: Double,
+        updatedAtAfter: Instant? = null,
+        updatedAtBefore: Instant? = null,
     ): String {
         val rankSelect = if (!query.isNullOrBlank()) {
             ", similarity(text, '${query.sanitizeInputForDB()}') AS rank"
         } else ""
-        val whereClause = if (tags.isEmpty() && query.isNullOrBlank()) {
-            ""
-        } else {
-            "WHERE " + listOfNotNull(
-                tags.takeIf { it.isNotEmpty() }?.joinToString(" $tagsClauseOperator ") { "? = ANY(tags)" }
-                    ?.let { "($it)" },
-                query?.takeIf { it.isNotBlank() }?.let { "similarity(text, ?) > $similarityThreshold" }
-            ).joinToString(" $whereClauseOperator ")
-        }
+        val whereClause =
+            if (tags.isEmpty() && query.isNullOrBlank() && updatedAtBefore == null && updatedAtAfter == null) {
+                ""
+            } else {
+                val updatedAtClause = mutableListOf<String>()
+                updatedAtAfter?.let {
+                    updatedAtClause += "updated_at >= ?"
+                }
+
+                updatedAtBefore?.let {
+                    updatedAtClause += "updated_at <= ?"
+                }
+
+                "WHERE " + listOfNotNull(
+                    tags.takeIf { it.isNotEmpty() }?.joinToString(" $tagsClauseOperator ") { "? = ANY(tags)" }
+                        ?.let { "($it)" },
+                    query?.takeIf { it.isNotBlank() }?.let { "similarity(text, ?) > $similarityThreshold" },
+                    updatedAtClause.takeIf { it.isNotEmpty() }?.joinToString(" AND ","(",")")
+                ).joinToString(" $whereClauseOperator ")
+            }
         val limitClause = limit?.let { " LIMIT $it" + if (offset > 0) " OFFSET $offset" else "" } ?: ""
         val orderClause =
             if (query.isNullOrBlank()) "ORDER BY updated_at DESC" else "ORDER BY rank DESC, updated_at DESC"
-        return "SELECT *$rankSelect FROM $tableName $whereClause $orderClause$limitClause"
+        return "SELECT *$rankSelect FROM $tableName $whereClause $orderClause$limitClause".also {
+            if (logging) logger.info { it }
+        }
     }
 
     private fun <R> queryFlow(
@@ -576,13 +637,25 @@ class DocStore<T : Any>(
     }
 }
 
-private fun setQueryParams(statement: java.sql.PreparedStatement, tags: List<String>, query: String?) {
+private fun setQueryParams(
+    statement: PreparedStatement,
+    tags: List<String>,
+    query: String?,
+    updatedAtAfter: Instant? = null,
+    updatedAtBefore: Instant? = null,
+) {
     var index = 1
     tags.forEach { tag ->
         statement.setString(index++, tag)
     }
     query?.let {
         statement.setString(index, it)
+    }
+    updatedAtAfter?.let {
+        statement.setTimestamp(index++, it.toSqlTimestamp())
+    }
+    updatedAtBefore?.let {
+        statement.setTimestamp(index, it.toSqlTimestamp())
     }
 }
 

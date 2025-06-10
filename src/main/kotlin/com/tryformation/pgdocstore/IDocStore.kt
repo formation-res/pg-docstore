@@ -211,7 +211,10 @@ interface IDocStore<T : Any> {
         limit: Int = 100,
         offset: Int = 0,
         similarityThreshold: Double = 0.1,
-    ): List<T>
+        updatedAtAfter: Instant? = null,
+        updatedAtBefore: Instant? = null,
+
+        ): List<T>
 
     /**
      * Similar to [documentsByRecency] but returns a list of the [DocStoreEntry] with the full row data.
@@ -224,7 +227,10 @@ interface IDocStore<T : Any> {
         limit: Int = 100,
         offset: Int = 0,
         similarityThreshold: Double = 0.1,
-    ): List<DocStoreEntry>
+        updatedAtAfter: Instant? = null,
+        updatedAtBefore: Instant? = null,
+
+        ): List<DocStoreEntry>
 
     /**
      * Returns a flow of documents ordered by recency. This will scroll through the results
@@ -247,7 +253,10 @@ interface IDocStore<T : Any> {
         whereClauseOperator: BooleanOperator = BooleanOperator.AND,
         similarityThreshold: Double = 0.1,
         fetchSize: Int = 100,
-    ): Flow<T>
+        updatedAtAfter: Instant? = null,
+        updatedAtBefore: Instant? = null,
+
+        ): Flow<T>
 
     /**
      * Similar to [documentsByRecencyScrolling] but returns a flow of the [DocStoreEntry] with the full row data.
@@ -259,7 +268,10 @@ interface IDocStore<T : Any> {
         whereClauseOperator: BooleanOperator = BooleanOperator.AND,
         fetchSize: Int = 100,
         similarityThreshold: Double = 0.1,
-    ): Flow<DocStoreEntry>
+        updatedAtAfter: Instant? = null,
+        updatedAtBefore: Instant? = null,
+
+        ): Flow<DocStoreEntry>
 
     /**
      * Updates all documents in the store and re-runs all the extract functions.
