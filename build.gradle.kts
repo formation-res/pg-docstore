@@ -35,6 +35,11 @@ java {
     sourceCompatibility = JavaVersion.VERSION_21
     targetCompatibility = JavaVersion.VERSION_21
 }
+kotlin {
+    compilerOptions {
+        optIn = listOf("kotlin.time.ExperimentalTime")
+    }
+}
 
 dependencies {
     implementation(KotlinX.coroutines.jdk8)
@@ -42,6 +47,7 @@ dependencies {
     implementation(KotlinX.serialization.json)
     implementation(KotlinX.datetime)
     implementation("io.github.microutils:kotlin-logging:_")
+    implementation("org.jetbrains.kotlin:kotlin-reflect:_")
 
     api("com.jillesvangurp:kotlinx-serialization-extensions:_")
 

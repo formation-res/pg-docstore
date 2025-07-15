@@ -7,10 +7,10 @@ import java.sql.Timestamp
 import javax.sql.DataSource
 import kotlin.reflect.KProperty
 import kotlin.time.Duration
+import kotlin.time.Instant
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.map
-import kotlinx.datetime.Instant
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
 import mu.KotlinLogging

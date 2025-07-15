@@ -1,7 +1,6 @@
 package com.tryformation.pgdocstore
 
-import kotlinx.datetime.Instant
-
+import kotlin.time.Instant
 data class DocStoreEntry(
     val id: String,
     val createdAt: Instant,
