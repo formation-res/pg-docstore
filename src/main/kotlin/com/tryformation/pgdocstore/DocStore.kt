@@ -504,6 +504,7 @@ class DocStore<T : Any>(
                 updatedAtBefore = updatedAtBefore
             )
         return withDocStoreConnection { connection ->
+            // this is fine because we control how the sql is created
             connection.prepareStatement(sql).use { statement ->
                 setQueryParams(statement, tags, query, updatedAtAfter, updatedAtBefore)
                 statement.executeQuery().use { rs ->
@@ -649,13 +650,13 @@ private fun setQueryParams(
         statement.setString(index++, tag)
     }
     query?.let {
-        statement.setString(index, it)
+        statement.setString(index++, it)
     }
     updatedAtAfter?.let {
         statement.setTimestamp(index++, it.toSqlTimestamp())
     }
     updatedAtBefore?.let {
-        statement.setTimestamp(index, it.toSqlTimestamp())
+        statement.setTimestamp(index++, it.toSqlTimestamp())
     }
 }
 

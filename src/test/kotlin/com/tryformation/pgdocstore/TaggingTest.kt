@@ -9,9 +9,6 @@ import java.util.UUID
 import kotlin.time.Duration.Companion.days
 import kotlin.time.Clock
 
-@Serializable
-data class TaggedModel(val title: String, val tags: List<String> = listOf(), val id:String = UUID.randomUUID().toString())
-
 class TaggingTest : DbTestBase() {
 
     @Test
