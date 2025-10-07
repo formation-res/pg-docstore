@@ -660,7 +660,9 @@ class DocStore<T : Any>(
             statement.setString(index++, tag)
         }
         query?.let {
-            statement.setString(index++, queryNormalizer(it))
+            if(it.isNotBlank()) {
+                statement.setString(index++, queryNormalizer(it))
+            }
         }
         updatedAtAfter?.let {
             statement.setTimestamp(index++, it.toSqlTimestamp())
