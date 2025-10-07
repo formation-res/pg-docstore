@@ -28,6 +28,10 @@ class DocStore<T : Any>(
     private val json: Json = DEFAULT_JSON,
     private val tagExtractor: (T) -> List<String>? = { null },
     private val textExtractor: (T) -> String? = { null },
+    /** used to normalize extracted text before it is stored */
+    private val indexNormalizer: (String)->String = {it},
+    /** used to normalize extracted text before it is queried; defaults to doing the same thing as [indexNormalizer] */
+    private val queryNormalizer: (String)->String = indexNormalizer,
     private val idExtractor: (T) -> String = { d ->
         val p = d::class.members.find { it.name == "id" } as KProperty<*>?
         p?.getter?.call(d)?.toString() ?: error("property id not found")
@@ -51,6 +55,7 @@ class DocStore<T : Any>(
         // create a new transaction
         else withDocStoreConnection { conn ->
             try {
+                if(logging) logger.info { "autocommit false" }
                 conn.autoCommit = false
                 val result = block(
                     // create a copy of the docstore with the connection
@@ -61,11 +66,14 @@ class DocStore<T : Any>(
                         json = json,
                         tagExtractor = tagExtractor,
                         textExtractor = textExtractor,
+                        indexNormalizer = indexNormalizer,
+                        queryNormalizer = queryNormalizer,
                         idExtractor = idExtractor,
                         logging = logging,
                         connection = conn
                     )
                 )
+                if(logging) logger.info { "commit" }
                 conn.commit()
                 result
             } catch (e: Exception) {
@@ -111,8 +119,8 @@ class DocStore<T : Any>(
                 statement.setTimestamp(3, timestamp.toSqlTimestamp())
                 statement.setString(4, serialized)
                 statement.setArray(5, connection.createArrayOf("text", tags?.toTypedArray()))
-                statement.setString(6, text)
-
+                statement.setString(6, text?.let { indexNormalizer(it) })
+                if (logging) logger.info { "SQL: ${statement}" }
                 statement.executeUpdate()
             }
 
@@ -130,6 +138,8 @@ class DocStore<T : Any>(
                 """.trimIndent()
             ).use { statement ->
                 statement.setString(1, id)
+                if (logging) logger.info { "SQL: ${statement}" }
+
                 statement.executeQuery().use { resultSet ->
                     if (resultSet.next()) {
                         val jsonString = resultSet.getString(DocStoreEntry::json.name)
@@ -289,8 +299,9 @@ class DocStore<T : Any>(
                 stmt.setTimestamp(1, timestamp.toSqlTimestamp())
                 stmt.setString(2, updatedJson)
                 stmt.setArray(3, conn.createArrayOf("text", tags?.toTypedArray()))
-                stmt.setString(4, text)
+                stmt.setString(4, text?.let { indexNormalizer(it) })
                 stmt.setString(5, id)
+                if (logging) logger.info { "SQL: ${stmt}" }
                 stmt.executeUpdate()
             }
 
@@ -415,8 +426,9 @@ class DocStore<T : Any>(
                     statement.setArray(paramIndex++, connection.createArrayOf("text", tags?.toTypedArray()))
                     statement.setTimestamp(paramIndex++, ts)
                     statement.setTimestamp(paramIndex++, ts)
-                    statement.setString(paramIndex++, text)
+                    statement.setString(paramIndex++, text?.let { indexNormalizer(it) })
                 }
+                if (logging) logger.info { "SQL: ${statement}" }
 
                 statement.executeUpdate()
             }
@@ -581,7 +593,8 @@ class DocStore<T : Any>(
         updatedAtAfter: Instant? = null,
         updatedAtBefore: Instant? = null,
     ): String {
-        val rankSelect = if (!query.isNullOrBlank()) {
+        val useLike = similarityThreshold == 1.0
+        val rankSelect = if (!query.isNullOrBlank() && !useLike) {
             ", similarity(text, '${query.sanitizeInputForDB()}') AS rank"
         } else ""
         val whereClause =
@@ -589,24 +602,23 @@ class DocStore<T : Any>(
                 ""
             } else {
                 val updatedAtClause = mutableListOf<String>()
-                updatedAtAfter?.let {
-                    updatedAtClause += "updated_at >= ?"
-                }
+                updatedAtAfter?.let { updatedAtClause += "updated_at >= ?" }
+                updatedAtBefore?.let { updatedAtClause += "updated_at <= ?" }
 
-                updatedAtBefore?.let {
-                    updatedAtClause += "updated_at <= ?"
+                val queryClause = query?.takeIf { it.isNotBlank() }?.let {
+                    if (useLike) "text LIKE ?" else "similarity(text, ?) >= $similarityThreshold"
                 }
 
                 "WHERE " + listOfNotNull(
                     tags.takeIf { it.isNotEmpty() }?.joinToString(" $tagsClauseOperator ") { "? = ANY(tags)" }
                         ?.let { "($it)" },
-                    query?.takeIf { it.isNotBlank() }?.let { "similarity(text, ?) > $similarityThreshold" },
-                    updatedAtClause.takeIf { it.isNotEmpty() }?.joinToString(" AND ","(",")")
+                    queryClause,
+                    updatedAtClause.takeIf { it.isNotEmpty() }?.joinToString(" AND ", "(", ")")
                 ).joinToString(" $whereClauseOperator ")
             }
         val limitClause = limit?.let { " LIMIT $it" + if (offset > 0) " OFFSET $offset" else "" } ?: ""
         val orderClause =
-            if (query.isNullOrBlank()) "ORDER BY updated_at DESC" else "ORDER BY rank DESC, updated_at DESC"
+            if (query.isNullOrBlank() || useLike) "ORDER BY updated_at DESC" else "ORDER BY rank DESC, updated_at DESC"
         return "SELECT *$rankSelect FROM $tableName $whereClause $orderClause$limitClause".also {
             if (logging) logger.info { it }
         }
@@ -636,29 +648,29 @@ class DocStore<T : Any>(
     override suspend fun reExtract() {
         bulkInsert(documentsByRecencyScrolling(emptyList(), null, BooleanOperator.AND, BooleanOperator.AND, 0.5, 100))
     }
+    private fun setQueryParams(
+        statement: PreparedStatement,
+        tags: List<String>,
+        query: String?,
+        updatedAtAfter: Instant? = null,
+        updatedAtBefore: Instant? = null,
+    ) {
+        var index = 1
+        tags.forEach { tag ->
+            statement.setString(index++, tag)
+        }
+        query?.let {
+            statement.setString(index++, queryNormalizer(it))
+        }
+        updatedAtAfter?.let {
+            statement.setTimestamp(index++, it.toSqlTimestamp())
+        }
+        updatedAtBefore?.let {
+            statement.setTimestamp(index++, it.toSqlTimestamp())
+        }
+    }
 }
 
-private fun setQueryParams(
-    statement: PreparedStatement,
-    tags: List<String>,
-    query: String?,
-    updatedAtAfter: Instant? = null,
-    updatedAtBefore: Instant? = null,
-) {
-    var index = 1
-    tags.forEach { tag ->
-        statement.setString(index++, tag)
-    }
-    query?.let {
-        statement.setString(index++, it)
-    }
-    updatedAtAfter?.let {
-        statement.setTimestamp(index++, it.toSqlTimestamp())
-    }
-    updatedAtBefore?.let {
-        statement.setTimestamp(index++, it.toSqlTimestamp())
-    }
-}
 
 private fun toEntry(rs: java.sql.ResultSet): DocStoreEntry {
     return DocStoreEntry(
