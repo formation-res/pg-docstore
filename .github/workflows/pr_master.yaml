@@ -16,20 +16,12 @@ concurrency:
 
 jobs:
   build-and-test:
-    name: Java ${{ matrix.java }} / PostgreSQL ${{ matrix.postgres }}
+    name: Build and test
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        java: ['25', '26']
-        postgres: ['18.6']
-        include:
-          - java: '25'
-            postgres: '16'
     services:
       postgres:
-        image: postgres:${{ matrix.postgres }}
+        image: postgres:18.6
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: secret
@@ -48,7 +40,7 @@ jobs:
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
-          java-version: ${{ matrix.java }}
+          java-version: '25'
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
       - name: Build, test, and generate publication artifacts
         run: ./gradlew build dokkaJar generatePomFileForMavenPublication -PuseExistingPostgres=true --stacktrace
@@ -56,7 +48,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: test-reports-java-${{ matrix.java }}-postgres-${{ matrix.postgres }}
+          name: test-reports
           path: |
             build/reports/tests/
             build/test-results/
