@@ -31,7 +31,7 @@ interface IDocStore<T : Any> {
     suspend fun <R> transact(block: suspend (IDocStore<T>) -> R): R
 
     /**
-     * Create a document. The [idExtractor] will be used to extract an id from the document.
+     * Create a document. The configured id extractor will be used to extract an id from the document.
      *
      * Optionally, you can override the [timestamp] and specify that the document should be
      * overwritten if it already exists with [onConflictUpdate].

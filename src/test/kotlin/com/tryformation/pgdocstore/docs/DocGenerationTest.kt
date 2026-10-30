@@ -15,7 +15,7 @@ import kotlinx.coroutines.flow.count
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
-import mu.KotlinLogging
+import io.github.oshai.kotlinlogging.KotlinLogging
 import org.junit.jupiter.api.Test
 
 private val logger = KotlinLogging.logger { }
@@ -46,7 +46,7 @@ val readmeMd = sourceGitRepository.md {
     logger.info { "creating connection" }
 
     val connectionPool = connectionPool(
-
+        jdbcUrl = System.getProperty("pgdocstore.test.jdbcUrl", "jdbc:postgresql://localhost:55432/docstore")
     )
 
     logger.info { "creating store" }
@@ -69,7 +69,7 @@ val readmeMd = sourceGitRepository.md {
         )
 
         val store = DocStore(
-            dataSource = connectionPool(),
+            dataSource = connectionPool,
             serializationStrategy = MyModel.serializer(),
             tableName = tableName,
             idExtractor = MyModel::id,
@@ -123,7 +123,7 @@ val readmeMd = sourceGitRepository.md {
             """.trimIndent()
             example {
                 val store = DocStore(
-                    dataSource = connectionPool(),
+                    dataSource = connectionPool,
                     serializationStrategy = MyModel.serializer(),
                     tableName = tableName,
                     idExtractor = MyModel::id,

@@ -1,16 +1,13 @@
 import com.avast.gradle.dockercompose.ComposeExtension
-import java.net.ConnectException
-import java.net.URI
 import kotlin.math.max
 import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.gradle.api.tasks.testing.logging.TestLogEvent
-import org.jetbrains.dokka.gradle.DokkaTask
 
 plugins {
-    kotlin("jvm")
-    kotlin("plugin.serialization")
-    id("org.jetbrains.dokka")
-    id("com.avast.gradle.docker-compose")
+    alias(libs.plugins.kotlin.jvm)
+    alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.dokka)
+    alias(libs.plugins.docker.compose)
     id("maven-publish")
 }
 
@@ -32,48 +29,38 @@ repositories {
 }
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+    withSourcesJar()
 }
+
 kotlin {
     compilerOptions {
-        optIn = listOf("kotlin.time.ExperimentalTime")
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_25)
     }
 }
 
 dependencies {
-    implementation(KotlinX.coroutines.jdk8)
-    implementation(KotlinX.coroutines.slf4j)
-    implementation(KotlinX.serialization.json)
-    implementation(KotlinX.datetime)
-    implementation("io.github.microutils:kotlin-logging:_")
-    implementation("org.jetbrains.kotlin:kotlin-reflect:_")
-
-    api("com.jillesvangurp:kotlinx-serialization-extensions:_")
-
-    implementation("io.github.microutils:kotlin-logging:_")
-
-    // jdbc+hikaricp
-    api("org.postgresql:postgresql:_")
-
-    // HikariCP Connection Pool
-    api("com.zaxxer:HikariCP:_")
+    api(libs.coroutines.core)
+    implementation(libs.coroutines.slf4j)
+    api(libs.serialization.json)
+    implementation(libs.kotlin.logging)
+    implementation(libs.kotlin.reflect)
+    api(libs.serialization.extensions)
+    api(libs.postgresql)
+    api(libs.hikaricp)
 
     testImplementation(kotlin("test-junit5"))
-    testImplementation(Testing.junit.jupiter.api)
-    testImplementation(Testing.junit.jupiter.engine)
-    testImplementation(Testing.kotest.assertions.core)
-    testImplementation("org.slf4j:slf4j-api:_")
-    testImplementation("org.slf4j:jcl-over-slf4j:_")
-    testImplementation("org.slf4j:log4j-over-slf4j:_")
-    testImplementation("org.slf4j:jul-to-slf4j:_")
-    testImplementation("org.apache.logging.log4j:log4j-to-slf4j:_") // es seems to insist on log4j2
-    testImplementation("ch.qos.logback:logback-classic:_")
-    testImplementation("com.github.jillesvangurp:kotlin4example:_")
+    testImplementation(platform(libs.junit.bom))
+    testImplementation(libs.junit.jupiter)
+    testRuntimeOnly(libs.junit.launcher)
+    testImplementation(libs.kotest.assertions)
+    testImplementation(libs.slf4j.api)
+    testRuntimeOnly(libs.logback.classic)
+    testImplementation(libs.kotlin4example)
 }
 
 configure<ComposeExtension> {
-    buildAdditionalArgs = listOf("--force-rm")
     stopContainers = true
     removeContainers = true
     useComposeFiles = listOf("docker-compose.yml")
@@ -90,14 +77,8 @@ configure<ComposeExtension> {
 
 }
 
-val sourcesJar by tasks.registering(Jar::class) {
-    archiveClassifier.set("sources")
-    from(sourceSets.main.get().allSource)
-}
-
 val dokkaJar = tasks.register<Jar>("dokkaJar") {
-    from(tasks["dokkaHtml"])
-    dependsOn(tasks["dokkaHtml"])
+    from(tasks.named("dokkaGeneratePublicationHtml"))
     archiveClassifier.set("javadoc")
 }
 
@@ -105,7 +86,6 @@ publishing {
     publications {
         create<MavenPublication>("maven") {
             from(components["java"])
-            artifact(sourcesJar.get())
             artifact(dokkaJar.get())
         }
     }
@@ -118,100 +98,24 @@ publishing {
     }
 }
 
-tasks.withType<Test> {
-    failFast = false
-    notCompatibleWithConfigurationCache("db isUp check is not compatible")
+val useExistingPostgres = providers.gradleProperty("useExistingPostgres")
+    .map(String::toBooleanStrict).orElse(false)
 
-    val isUp = try {
-        URI.create("http://localhost:5432").toURL().openConnection().connect()
-        true
-    } catch(e: ConnectException) {
-        project.logger.lifecycle("CONNECTION REFUSED ${e::class.simpleName} ${e.message}")
-        e.message != "Connection refused"
-    }
-
-    if(!isUp) {
-        project.logger.lifecycle("Compose hooks")
-        // if it's already running just use the existing instance
+tasks.withType<Test>().configureEach {
+    if (!useExistingPostgres.get()) {
         dependsOn("composeUp")
         finalizedBy("composeDown")
-    } else {
-        project.logger.lifecycle("DB is already running, no compose hooks")
     }
-
-    useJUnitPlatform {
-
-    }
-
-    systemProperties["junit.jupiter.execution.parallel.enabled"] = "true"
-    // executes test classes concurrently
-    systemProperties["junit.jupiter.execution.parallel.mode.default"] = "concurrent"
-    // executes tests inside a class concurrently
-    systemProperties["junit.jupiter.execution.parallel.mode.classes.default"] = "concurrent"
-    systemProperties["junit.jupiter.execution.parallel.config.strategy"] = "fixed"
-
-    // make sure we don't starve es and enrichment of cpu cores
-    // note, our eventually blocks cause threads to spend a lot of time delaying
-    val threads = max(3,Runtime.getRuntime().availableProcessors()-2)
-    println("running tests with $threads threads on a machine with ${Runtime.getRuntime().availableProcessors()} CPUs and ${Runtime.getRuntime().maxMemory()/1024/1024} MB memory")
-//    val threads = 3
-    systemProperties["junit.jupiter.execution.parallel.config.fixed.parallelism"]=threads
-    systemProperties["junit.jupiter.execution.parallel.config.fixed.max-pool-size"]=threads
-
-    systemProperties["junit.jupiter.testclass.order.default"] = "org.junit.jupiter.api.ClassOrderer\$ClassName"
-//    systemProperties["junit.jupiter.testclass.order.random.seed"] = "42"
-    // works around an issue with the ktor client and redis client needing more than 64 threads in our tests.
-//    systemProperties["kotlinx.coroutines.io.parallelism"] = "200"
-
-    // junit test runner in gradle ignores @ActiveProfile, go figure
-    systemProperty("spring.profiles.active", "test")
-
+    systemProperty("pgdocstore.test.jdbcUrl", providers.gradleProperty("testJdbcUrl")
+        .getOrElse("jdbc:postgresql://localhost:55432/docstore"))
+    useJUnitPlatform()
+    systemProperty("junit.jupiter.execution.parallel.enabled", "true")
+    systemProperty("junit.jupiter.execution.parallel.mode.default", "concurrent")
+    systemProperty("junit.jupiter.execution.parallel.mode.classes.default", "concurrent")
+    systemProperty("junit.jupiter.execution.parallel.config.strategy", "fixed")
+    val threads = max(3, Runtime.getRuntime().availableProcessors() - 2)
+    systemProperty("junit.jupiter.execution.parallel.config.fixed.parallelism", threads)
+    systemProperty("junit.jupiter.execution.parallel.config.fixed.max-pool-size", threads)
     testLogging.exceptionFormat = TestExceptionFormat.FULL
-    testLogging.events = setOf(
-        TestLogEvent.FAILED,
-        TestLogEvent.PASSED,
-        TestLogEvent.SKIPPED,
-        TestLogEvent.STANDARD_ERROR,
-        TestLogEvent.STANDARD_OUT
-    )
-
-    addTestListener(object : TestListener {
-        val failures = mutableListOf<String>()
-        override fun beforeSuite(desc: TestDescriptor) {
-        }
-
-        override fun afterSuite(desc: TestDescriptor, result: TestResult) {
-
-        }
-
-        override fun beforeTest(desc: TestDescriptor) {
-        }
-
-        override fun afterTest(desc: TestDescriptor, result: TestResult) {
-            if (result.resultType == TestResult.ResultType.FAILURE) {
-                val report =
-                    """
-                    TESTFAILURE ${desc.className} - ${desc.name}
-                    ${
-                        result.exception?.let { e ->
-                            """
-                            ${e::class.simpleName} ${e.message}
-                        """.trimIndent()
-                        }
-                    }
-                    -----------------
-                    """.trimIndent()
-                failures.add(report)
-            }
-        }
-    })
+    testLogging.events = setOf(TestLogEvent.FAILED, TestLogEvent.SKIPPED)
 }
-
-// gradle dokkaGfm
-tasks.withType<DokkaTask>().configureEach {
-    notCompatibleWithConfigurationCache("https://github.com/Kotlin/dokka/issues/2231")
-}
-
-
-
-

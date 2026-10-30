@@ -44,6 +44,6 @@ open class DbTestBase {
 }
 
 val db by lazy {
-    connectionPool()
+    connectionPool(jdbcUrl = System.getProperty("pgdocstore.test.jdbcUrl", "jdbc:postgresql://localhost:55432/docstore"))
 }
 

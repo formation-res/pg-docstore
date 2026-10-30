@@ -16,6 +16,27 @@ for the elaborate querying support in databases. But we do like to keep our data
 Additionally, we like having a clear separation between what we store and what we query on. So, our architecture includes
 an ETL pipeline that builds our search index from the raw data in pg-docstore.
 
+## Building and testing
+
+Java 25 or newer and Docker Compose are required. The library targets Java 25;
+local builds can run on JDK 26. CI tests JDK 25 and 26 with PostgreSQL 18,
+and JDK 25 with PostgreSQL 16.
+
+```sh
+./gradlew build dokkaJar
+```
+
+Tests start a temporary PostgreSQL 18 container on `localhost:55432` and stop it
+afterward. To use a database you started yourself:
+
+```sh
+./gradlew check -PuseExistingPostgres=true -PtestJdbcUrl=jdbc:postgresql://localhost:55432/docstore
+```
+
+The test database must be named `docstore`, with user `postgres` and password
+`secret`. Tests create and drop tables; use a dedicated test database.
+Dependency and plugin versions are in `gradle/libs.versions.toml`.
+
 ## Gradle
 
 Add the `maven.tryformation.com` repository:
@@ -89,7 +110,7 @@ Using this data class, we can now create a store.
 
 ```kotlin
 val store = DocStore(
-  dataSource = connectionPool(),
+  dataSource = connectionPool,
   serializationStrategy = MyModel.serializer(),
   tableName = tableName,
   idExtractor = MyModel::id,

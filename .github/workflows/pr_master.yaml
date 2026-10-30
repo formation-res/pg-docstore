@@ -1,49 +1,62 @@
-# This file was generated using Kotlin DSL (.github/workflows/pr_master.main.kts).
-# If you want to modify the workflow, please change the Kotlin file and regenerate this YAML file.
-# Generated with https://github.com/typesafegithub/github-workflows-kt
+name: Process Pull Request
 
-name: 'Process Pull Request'
 on:
   push:
-    branches:
-    - 'main'
+    branches: [main]
   pull_request:
-    branches:
-    - 'main'
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  check_yaml_consistency:
-    name: 'Check YAML consistency'
-    runs-on: 'ubuntu-latest'
-    steps:
-    - id: 'step-0'
-      name: 'Check out'
-      uses: 'actions/checkout@v4'
-    - id: 'step-1'
-      name: 'Execute script'
-      run: 'rm ''.github/workflows/pr_master.yaml'' && ''.github/workflows/pr_master.main.kts'''
-    - id: 'step-2'
-      name: 'Consistency check'
-      run: 'git diff --exit-code ''.github/workflows/pr_master.yaml'''
   build-and-test:
-    name: 'Build And Test'
-    runs-on: 'ubuntu-latest'
-    needs:
-    - 'check_yaml_consistency'
+    name: Java ${{ matrix.java }} / PostgreSQL ${{ matrix.postgres }}
+    runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ['25', '26']
+        postgres: ['18']
+        include:
+          - java: '25'
+            postgres: '16'
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: secret
+          POSTGRES_DB: docstore
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d docstore"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
-    - id: 'step-0'
-      name: 'checkout'
-      uses: 'actions/checkout@v4'
-    - id: 'step-1'
-      name: 'setup jdk'
-      uses: 'actions/setup-java@v4'
-      with:
-        java-version: '21'
-        distribution: 'corretto'
-        java-package: 'jdk'
-        cache: 'gradle'
-    - id: 'step-2'
-      name: 'build with gradle'
-      uses: 'gradle/gradle-build-action@v2'
-      with:
-        arguments: 'check'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+      - name: Build, test, and generate publication artifacts
+        run: ./gradlew build dokkaJar generatePomFileForMavenPublication -PuseExistingPostgres=true --stacktrace
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-reports-java-${{ matrix.java }}-postgres-${{ matrix.postgres }}
+          path: |
+            build/reports/tests/
+            build/test-results/
