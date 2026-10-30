@@ -6,11 +6,17 @@ import java.sql.PreparedStatement
 import java.sql.Timestamp
 import javax.sql.DataSource
 import kotlin.reflect.KProperty
+import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Instant
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -41,49 +47,33 @@ class DocStore<T : Any>(
     private val connection: Connection? = null,
 
     ) : IDocStore<T> {
-    private suspend fun <T> withDocStoreConnection(block: suspend (Connection) -> T): T {
-        return if (connection != null) {
+    private suspend fun <R> withDocStoreConnection(block: suspend (Connection) -> R): R =
+        if (connection != null) onDatabaseDispatcher {
+            currentCoroutineContext().ensureActive()
             block(connection)
-        } else {
-            dataSource.withConnection(block)
-        }
-    }
+        } else dataSource.withConnection(block)
 
-    override suspend fun <R> transact(block: suspend (IDocStore<T>) -> R): R {
-        // already in transaction
-        return if (connection != null) block(this)
-        // create a new transaction
-        else withDocStoreConnection { conn ->
-            try {
-                if(logging) logger.info { "autocommit false" }
-                conn.autoCommit = false
-                val result = block(
-                    // create a copy of the docstore with the connection
-                    DocStore(
-                        dataSource = dataSource,
-                        serializationStrategy = serializationStrategy,
-                        tableName = tableName,
-                        json = json,
-                        tagExtractor = tagExtractor,
-                        textExtractor = textExtractor,
-                        indexNormalizer = indexNormalizer,
-                        queryNormalizer = queryNormalizer,
-                        idExtractor = idExtractor,
-                        logging = logging,
-                        connection = conn
-                    )
+    private suspend fun <R> withDocStoreTransaction(block: suspend (Connection) -> R): R =
+        if (connection != null) withDocStoreConnection(block) else dataSource.withTransaction(block)
+
+    override suspend fun <R> transact(block: suspend (IDocStore<T>) -> R): R =
+        if (connection != null) block(this) else dataSource.withTransaction { conn ->
+            block(
+                DocStore(
+                    dataSource = dataSource,
+                    serializationStrategy = serializationStrategy,
+                    tableName = tableName,
+                    json = json,
+                    tagExtractor = tagExtractor,
+                    textExtractor = textExtractor,
+                    indexNormalizer = indexNormalizer,
+                    queryNormalizer = queryNormalizer,
+                    idExtractor = idExtractor,
+                    logging = logging,
+                    connection = conn
                 )
-                if(logging) logger.info { "commit" }
-                conn.commit()
-                result
-            } catch (e: Exception) {
-                logger.error(e) { "Error during transaction in $tableName: ${e.message}" }
-                conn.rollback()
-                throw e
-            }
-
+            )
         }
-    }
 
     override suspend fun create(doc: T, timestamp: Instant, onConflictUpdate: Boolean): DocStoreEntry {
         return create(idExtractor.invoke(doc), doc, timestamp, onConflictUpdate)
@@ -121,7 +111,7 @@ class DocStore<T : Any>(
                 statement.setArray(5, connection.createArrayOf("text", tags?.toTypedArray()))
                 statement.setString(6, text?.let { indexNormalizer(it) })
                 if (logging) logger.info { "SQL: ${statement}" }
-                statement.executeUpdate()
+                statement.withCancellation { statement.executeUpdate() }
             }
 
             DocStoreEntry(id, timestamp, timestamp, serialized, tags, text).also {
@@ -140,7 +130,7 @@ class DocStore<T : Any>(
                 statement.setString(1, id)
                 if (logging) logger.info { "SQL: ${statement}" }
 
-                statement.executeQuery().use { resultSet ->
+                statement.query { resultSet ->
                     if (resultSet.next()) {
                         val jsonString = resultSet.getString(DocStoreEntry::json.name)
                         json.decodeFromString(serializationStrategy, jsonString)
@@ -169,7 +159,7 @@ class DocStore<T : Any>(
                     statement.setString(index + 1, id)
                 }
 
-                statement.executeQuery().use { resultSet ->
+                statement.query { resultSet ->
                     val results = mutableListOf<T>()
                     while (resultSet.next()) {
                         val jsonStr = resultSet.getString(DocStoreEntry::json.name)
@@ -193,7 +183,7 @@ class DocStore<T : Any>(
             """.trimIndent()
             ).use { statement ->
                 statement.setString(1, id)
-                statement.executeQuery().use { resultSet ->
+                statement.query { resultSet ->
                     if (resultSet.next()) {
                         val entry = DocStoreEntry(
                             id = resultSet.getString("id"),
@@ -230,7 +220,7 @@ class DocStore<T : Any>(
                     statement.setString(index + 1, id)
                 }
 
-                statement.executeQuery().use { resultSet ->
+                statement.query { resultSet ->
                     val results = mutableListOf<DocStoreEntry>()
                     while (resultSet.next()) {
                         results.add(
@@ -261,13 +251,13 @@ class DocStore<T : Any>(
     ): T {
         if (logging) logger.info { "$tableName start update transaction" }
 
-        return dataSource.withTransaction { conn ->
+        return withDocStoreTransaction { conn ->
             // Fetch the existing document
             val existing = conn.prepareStatement(
-                "SELECT json FROM $tableName WHERE id = ?"
+                "SELECT json FROM $tableName WHERE id = ? FOR UPDATE"
             ).use { stmt ->
                 stmt.setString(1, id)
-                stmt.executeQuery().use { rs ->
+                stmt.query { rs ->
                     if (rs.next()) {
                         val jsonStr = rs.getString("json")
                         json.decodeFromString(serializationStrategy, jsonStr)
@@ -302,7 +292,7 @@ class DocStore<T : Any>(
                 stmt.setString(4, text?.let { indexNormalizer(it) })
                 stmt.setString(5, id)
                 if (logging) logger.info { "SQL: ${stmt}" }
-                stmt.executeUpdate()
+                check(stmt.withCancellation { stmt.executeUpdate() } == 1) { "Document disappeared during update: $id" }
             }
 
             if (logging) logger.info { "$tableName updated $id: returning $updated" }
@@ -322,7 +312,7 @@ class DocStore<T : Any>(
             """.trimIndent()
             ).use { statement ->
                 statement.setString(1, id)
-                val deleted = statement.executeUpdate()
+                val deleted = statement.withCancellation { statement.executeUpdate() }
                 if (logging) {
                     if (deleted > 0) logger.info { "$tableName delete $id: deleted" }
                     else logger.info { "$tableName delete $id: not found" }
@@ -362,7 +352,7 @@ class DocStore<T : Any>(
         chunkSize: Int
     ) {
         bulkInsertWithId(
-            iterable = iterable.map { d ->
+            sequence = iterable.asSequence().map { d ->
                 idExtractor.invoke(d) to d
             },
             chunkSize = chunkSize
@@ -370,12 +360,10 @@ class DocStore<T : Any>(
     }
 
     override suspend fun bulkInsertWithId(flow: Flow<Pair<String, T>>, chunkSize: Int, delayMillis: Duration) {
-        if (logging) logger.info { "$tableName done bulk inserting" }
+        if (logging) logger.info { "$tableName start bulk inserting" }
 
-        transact { tDocstore ->
-            flow.chunked(chunkSize = chunkSize, delayMillis = delayMillis).collect { chunk ->
-                tDocstore.insertList(chunk)
-            }
+        flow.chunked(chunkSize = chunkSize, delayMillis = delayMillis).collect { chunk ->
+            insertList(chunk)
         }
         if (logging) logger.info { "$tableName done bulk inserting" }
 
@@ -386,10 +374,8 @@ class DocStore<T : Any>(
     }
 
     override suspend fun bulkInsertWithId(sequence: Sequence<Pair<String, T>>, chunkSize: Int) {
-        transact { tDocstore ->
-            sequence.chunked(chunkSize).forEach { chunk ->
-                tDocstore.insertList(chunk)
-            }
+        sequence.chunked(chunkSize).forEach { chunk ->
+            insertList(chunk)
         }
     }
 
@@ -430,7 +416,7 @@ class DocStore<T : Any>(
                 }
                 if (logging) logger.info { "SQL: ${statement}" }
 
-                statement.executeUpdate()
+                statement.withCancellation { statement.executeUpdate() }
             }
 
             if (logging) logger.info { "$tableName inserted list of ${chunk.size}" }
@@ -444,7 +430,7 @@ class DocStore<T : Any>(
             SELECT COUNT(*) FROM $tableName
             """.trimIndent()
             ).use { statement ->
-                statement.executeQuery().use { resultSet ->
+                statement.query { resultSet ->
                     if (resultSet.next()) {
                         resultSet.getLong(1)
                     } else {
@@ -478,10 +464,10 @@ class DocStore<T : Any>(
                 updatedAtAfter = updatedAtAfter,
                 updatedAtBefore = updatedAtBefore
             )
-        return withDocStoreConnection { connection ->
-            connection.prepareStatement(sql).use { statement ->
-                setQueryParams(statement, tags, query, updatedAtAfter, updatedAtBefore)
-                statement.executeQuery().use { rs ->
+        return withQueryConnection(sql) { connection ->
+            connection.prepareStatement(sql.sql).use { statement ->
+                setQueryParams(statement, sql.params)
+                statement.query { rs ->
                     val result = mutableListOf<T>()
                     while (rs.next()) {
                         result += json.decodeFromString(serializationStrategy, rs.getString("json"))
@@ -515,11 +501,10 @@ class DocStore<T : Any>(
                 updatedAtAfter = updatedAtAfter,
                 updatedAtBefore = updatedAtBefore
             )
-        return withDocStoreConnection { connection ->
-            // this is fine because we control how the sql is created
-            connection.prepareStatement(sql).use { statement ->
-                setQueryParams(statement, tags, query, updatedAtAfter, updatedAtBefore)
-                statement.executeQuery().use { rs ->
+        return withQueryConnection(sql) { connection ->
+            connection.prepareStatement(sql.sql).use { statement ->
+                setQueryParams(statement, sql.params)
+                statement.query { rs ->
                     val result = mutableListOf<DocStoreEntry>()
                     while (rs.next()) {
                         result += toEntry(rs)
@@ -551,7 +536,6 @@ class DocStore<T : Any>(
             updatedAtAfter = updatedAtAfter,
             updatedAtBefore = updatedAtBefore
         ),
-        tags + listOfNotNull(query),
         fetchSize
     ) { rs ->
         json.decodeFromString(serializationStrategy, rs.getString("json"))
@@ -578,9 +562,10 @@ class DocStore<T : Any>(
             updatedAtAfter = updatedAtAfter,
             updatedAtBefore = updatedAtBefore
         ),
-        tags + listOfNotNull(query),
         fetchSize
     ) { rs -> toEntry(rs) }
+
+    private data class Query(val sql: String, val params: List<Any>, val similarityThreshold: Double?)
 
     private fun constructQuery(
         tags: List<String>,
@@ -592,85 +577,151 @@ class DocStore<T : Any>(
         similarityThreshold: Double,
         updatedAtAfter: Instant? = null,
         updatedAtBefore: Instant? = null,
-    ): String {
-        val useLike = similarityThreshold == 1.0
-        val rankSelect = if (!query.isNullOrBlank() && !useLike) {
-            ", similarity(text, '${query.sanitizeInputForDB()}') AS rank"
-        } else ""
-        val whereClause =
-            if (tags.isEmpty() && query.isNullOrBlank() && updatedAtBefore == null && updatedAtAfter == null) {
-                ""
-            } else {
-                val updatedAtClause = mutableListOf<String>()
-                updatedAtAfter?.let { updatedAtClause += "updated_at >= ?" }
-                updatedAtBefore?.let { updatedAtClause += "updated_at <= ?" }
-
-                val queryClause = query?.takeIf { it.isNotBlank() }?.let {
-                    if (useLike) "text LIKE ?" else "similarity(text, ?) >= $similarityThreshold"
-                }
-
-                "WHERE " + listOfNotNull(
-                    tags.takeIf { it.isNotEmpty() }?.joinToString(" $tagsClauseOperator ") { "? = ANY(tags)" }
-                        ?.let { "($it)" },
-                    queryClause,
-                    updatedAtClause.takeIf { it.isNotEmpty() }?.joinToString(" AND ", "(", ")")
-                ).joinToString(" $whereClauseOperator ")
-            }
-        val limitClause = limit?.let { " LIMIT $it" + if (offset > 0) " OFFSET $offset" else "" } ?: ""
-        val orderClause =
-            if (query.isNullOrBlank() || useLike) "ORDER BY updated_at DESC" else "ORDER BY rank DESC, updated_at DESC"
-        return "SELECT *$rankSelect FROM $tableName $whereClause $orderClause$limitClause".also {
-            if (logging) logger.info { it }
+    ): Query {
+        require(similarityThreshold.isFinite() && similarityThreshold in 0.0..1.0) {
+            "similarityThreshold must be between 0 and 1"
         }
+        require(limit == null || limit >= 0) { "limit must not be negative" }
+        require(offset >= 0) { "offset must not be negative" }
+        val normalizedQuery = query?.takeIf { it.isNotBlank() }?.let(queryNormalizer)
+        val fuzzy = normalizedQuery != null && similarityThreshold != 1.0
+        val params = mutableListOf<Any>()
+        val rankSelect = if (fuzzy) {
+            params += normalizedQuery
+            ", similarity(text, ?) AS rank"
+        } else ""
+        val clauses = mutableListOf<String>()
+        if (tags.isNotEmpty()) {
+            params.add(tags)
+            clauses += "tags ${if (tagsClauseOperator == BooleanOperator.AND) "@>" else "&&"} ?::text[]"
+        }
+        if (normalizedQuery != null) {
+            params += normalizedQuery
+            clauses += if (fuzzy) {
+                // The operator enables GIN; the exact comparison preserves the Double threshold contract.
+                params += normalizedQuery
+                "(text % ? AND similarity(text, ?) >= $similarityThreshold)"
+            } else "text LIKE ?"
+        }
+        val dateClauses = mutableListOf<String>()
+        updatedAtAfter?.let { dateClauses += "updated_at >= ?"; params += it.toSqlTimestamp() }
+        updatedAtBefore?.let { dateClauses += "updated_at <= ?"; params += it.toSqlTimestamp() }
+        if (dateClauses.isNotEmpty()) clauses += dateClauses.joinToString(" AND ", "(", ")")
+        val where = if (clauses.isEmpty()) "" else "WHERE " + clauses.joinToString(" $whereClauseOperator ")
+        val order = if (fuzzy) "rank DESC, updated_at DESC, id" else "updated_at DESC, id"
+        val pagination = limit?.let { " LIMIT $it OFFSET $offset" } ?: ""
+        return Query("SELECT *$rankSelect FROM $tableName $where ORDER BY $order$pagination", params,
+            similarityThreshold.takeIf { fuzzy }).also {
+            if (logging) logger.info { it.sql }
+        }
+    }
+
+    private suspend fun <R> withQueryConnection(
+        query: Query,
+        cursor: Boolean = false,
+        block: suspend (Connection) -> R
+    ): R {
+        suspend fun execute(conn: Connection): R {
+            val threshold = query.similarityThreshold ?: return block(conn)
+            suspend fun setThreshold(value: String) {
+                conn.prepareStatement("SELECT set_config('pg_trgm.similarity_threshold', ?, true)").use { ps ->
+                    ps.setString(1, value)
+                    ps.query { rs -> rs.next() }
+                }
+            }
+            // For an owned transaction SET LOCAL is automatically reset by commit/rollback.
+            if (connection == null) {
+                setThreshold(threshold.toFloat().toString())
+                return block(conn)
+            }
+            val previous = conn.prepareStatement("SELECT current_setting('pg_trgm.similarity_threshold', true)").use { ps ->
+                ps.query { rs ->
+                    rs.next()
+                    rs.getString(1) ?: "0.3"
+                }
+            }
+            setThreshold(threshold.toFloat().toString())
+            var failure: Throwable? = null
+            try {
+                return block(conn)
+            } catch (e: Throwable) {
+                failure = e
+                throw e
+            } finally {
+                // Also restore after short-circuiting a flow inside the caller's still-active transaction.
+                try {
+                    withContext(NonCancellable) { setThreshold(previous) }
+                } catch (e: Throwable) {
+                    if (failure == null) throw e else failure.addSuppressed(e)
+                }
+            }
+        }
+        return if (cursor || query.similarityThreshold != null) withDocStoreTransaction { execute(it) }
+        else withDocStoreConnection { execute(it) }
     }
 
     private fun <R> queryFlow(
-        query: String,
-        params: List<Any>,
+        query: Query,
         fetchSize: Int,
         rowProcessor: (java.sql.ResultSet) -> R
-    ): Flow<R> = channelFlow {
-        withDocStoreConnection { connection ->
-            connection.prepareStatement(query).use { ps ->
-                ps.fetchSize = fetchSize
-                params.forEachIndexed { index, param ->
-                    ps.setObject(index + 1, param)
-                }
-                ps.executeQuery().use { rs ->
-                    while (rs.next()) {
-                        send(rowProcessor(rs))
+    ): Flow<R> {
+        require(fetchSize > 0) { "fetchSize must be positive" }
+        return flow {
+            withQueryConnection(query, cursor = true) { conn ->
+                conn.prepareStatement(query.sql).use { ps ->
+                    ps.fetchSize = fetchSize
+                    setQueryParams(ps, query.params)
+                    ps.query { rs ->
+                        while (rs.next()) emit(rowProcessor(rs))
                     }
                 }
+            }
+        }.flowOn(dbScope)
+    }
+
+    override suspend fun reExtract() {
+        var afterId: String? = null
+        while (true) {
+            val page = withDocStoreConnection { conn ->
+                val where = if (afterId == null) "" else "WHERE id > ?"
+                conn.prepareStatement("SELECT id, json FROM $tableName $where ORDER BY id LIMIT 100").use { ps ->
+                    afterId?.let { ps.setString(1, it) }
+                    ps.query { rs ->
+                        buildList { while (rs.next()) add(rs.getString("id") to rs.getString("json")) }
+                    }
+                }
+            }
+            if (page.isEmpty()) break
+            withDocStoreConnection { conn ->
+                conn.prepareStatement("UPDATE $tableName SET tags = ?, text = ?, updated_at = ? WHERE id = ? AND json = ?").use { ps ->
+                    for ((id, originalJson) in page) {
+                        currentCoroutineContext().ensureActive()
+                        val doc = json.decodeFromString(serializationStrategy, originalJson)
+                        ps.setArray(1, conn.createArrayOf("text", tagExtractor(doc)?.toTypedArray()))
+                        ps.setString(2, textExtractor(doc)?.let(indexNormalizer))
+                        ps.setTimestamp(3, Clock.System.now().toSqlTimestamp())
+                        ps.setString(4, id)
+                        ps.setString(5, originalJson)
+                        // Concurrent updates/deletes win; never write back the scanned JSON or insert missing rows.
+                        ps.withCancellation { ps.executeUpdate() }
+                    }
+                }
+            }
+            afterId = page.last().first
+        }
+    }
+
+    private fun setQueryParams(statement: PreparedStatement, params: List<Any>) {
+        params.forEachIndexed { index, param ->
+            when (param) {
+                is List<*> -> statement.setArray(index + 1, statement.connection.createArrayOf("text", param.toTypedArray()))
+                is String -> statement.setString(index + 1, param)
+                is Timestamp -> statement.setTimestamp(index + 1, param)
+                else -> statement.setObject(index + 1, param)
             }
         }
     }
 
-    override suspend fun reExtract() {
-        bulkInsert(documentsByRecencyScrolling(emptyList(), null, BooleanOperator.AND, BooleanOperator.AND, 0.5, 100))
-    }
-    private fun setQueryParams(
-        statement: PreparedStatement,
-        tags: List<String>,
-        query: String?,
-        updatedAtAfter: Instant? = null,
-        updatedAtBefore: Instant? = null,
-    ) {
-        var index = 1
-        tags.forEach { tag ->
-            statement.setString(index++, tag)
-        }
-        query?.let {
-            if(it.isNotBlank()) {
-                statement.setString(index++, queryNormalizer(it))
-            }
-        }
-        updatedAtAfter?.let {
-            statement.setTimestamp(index++, it.toSqlTimestamp())
-        }
-        updatedAtBefore?.let {
-            statement.setTimestamp(index++, it.toSqlTimestamp())
-        }
-    }
 }
 
 

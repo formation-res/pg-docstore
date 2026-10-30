@@ -3,10 +3,14 @@ package com.tryformation.pgdocstore
 import java.sql.Connection
 import java.util.concurrent.Executors
 import javax.sql.DataSource
+import kotlin.coroutines.ContinuationInterceptor
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import io.github.oshai.kotlinlogging.KotlinLogging
 
 private val logger = KotlinLogging.logger { }
@@ -15,9 +19,14 @@ internal val virtualThreadDispatcher: CoroutineDispatcher =
     Executors.newVirtualThreadPerTaskExecutor().asCoroutineDispatcher()
 internal val dbScope = virtualThreadDispatcher + CoroutineName("database")
 
+internal suspend fun <T> onDatabaseDispatcher(block: suspend () -> T): T =
+    if (currentCoroutineContext()[ContinuationInterceptor] === virtualThreadDispatcher) block()
+    else withContext(dbScope) { block() }
+
 suspend fun <T> DataSource.withConnection(block: suspend (Connection) -> T): T {
-    return withContext(dbScope) {
+    return onDatabaseDispatcher {
         this@withConnection.connection.use { conn ->
+            currentCoroutineContext().ensureActive()
             block.invoke(conn)
         }
     }
@@ -28,11 +37,17 @@ suspend fun <T> DataSource.withTransaction(block: suspend (Connection) -> T)=
         try {
             conn.autoCommit = false
             val result = block(conn)
+            currentCoroutineContext().ensureActive()
             conn.commit()
             result
-        } catch (e: Exception) {
-            logger.error(e) { "Error during transaction in: ${e.message}" }
-            conn.rollback()
+        } catch (e: Throwable) {
+            if (e is CancellationException) logger.debug { "Transaction cancelled" }
+            else logger.error(e) { "Error during transaction in: ${e.message}" }
+            try {
+                conn.rollback()
+            } catch (rollbackFailure: Throwable) {
+                e.addSuppressed(rollbackFailure)
+            }
             throw e
         }
     }

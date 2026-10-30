@@ -349,12 +349,17 @@ val readmeMd = sourceGitRepository.md {
 
         subSection("Transactions") {
             +"""
-                Most operations in the docstore are single sql statements and don't use a transaction. However,
-                you can of course control this if you need to, e.g. modify multiple documents in one transaction.                
-                
-                The `transact` function creates a new docstore with it's own isolated connection and the same parameters 
-                as its parent. The isolated connection is used for the duration of 
-                the transaction and exclusive to your code block. It will commit / rollback as needed. 
+                Single-statement writes commit automatically. Use `transact` to group operations atomically.
+                Updates lock the document row before running your callback and join the enclosing transaction.
+                Bulk inserts commit each chunk independently unless explicitly wrapped in `transact`.
+
+                The `transact` function supplies a store bound to one connection. Use that store for all operations
+                in the transaction, sequentially, and collect any flows before returning. Nested calls reuse the
+                transaction without creating savepoints. Keep update callbacks short because they hold a row lock.
+
+                JDBC statements respond to coroutine cancellation, and transactions check cancellation before committing.
+                Cancellation or a connection failure during commit can still leave the outcome uncertain; retries need
+                to be idempotent.
                                  
             """.trimIndent()
 

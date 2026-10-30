@@ -23,7 +23,13 @@ interface IDocStore<T : Any> {
      * Executes the given [block] within a database transaction.
      *
      * Returns the result of [block]. If an exception is thrown, the transaction is rolled back.
-     * If already inside a transaction, reuses the current one.
+     * If already inside a transaction, reuses the current one (without a savepoint).
+     * Use the supplied store for every operation that should participate in the transaction.
+     * Use a transactional store sequentially; do not share it between concurrent coroutines or retain it after the block.
+     * Collect flows from it before the block returns.
+     *
+     * JDBC statements are cancelled when the coroutine is cancelled, and cancellation is checked before committing.
+     * A cancellation or connection failure during commit can still leave the outcome uncertain; retries must be idempotent.
      *
      * @param block A suspending function that takes a transactional version of [IDocStore].
      * @return The result of the block.
@@ -88,7 +94,8 @@ interface IDocStore<T : Any> {
      *
      * You can optionally specify a different [timestamp] than now.
      *
-     * Note,
+     * The row is locked until the transaction ends, so concurrent updates read the latest committed version.
+     * The callback runs once while holding that lock; keep suspending work inside it short.
      */
     suspend fun update(
         doc: T,
@@ -118,8 +125,8 @@ interface IDocStore<T : Any> {
      * Bulk insert documents from a [flow].
      *
      * Specify [chunkSize] to control how many documents
-     * are inserted for each page. Note, unless you surround this with transact,
-     * no transaction is used.
+     * are inserted for each page. Each chunk commits independently unless you surround this with [transact].
+     * An upstream failure leaves earlier committed chunks in place.
      *
      * Useful in combination with [documentsByRecencyScrolling], which returns a flow of documents.
      */
@@ -132,8 +139,8 @@ interface IDocStore<T : Any> {
      * Bulk insert a [sequence].
      *
      * Specify [chunkSize] to control how many documents
-     * are inserted for each page. Note, unless you surround this with transact,
-     * no transaction is used.
+     * are inserted for each page. Each chunk commits independently unless you surround this with [transact].
+     * An upstream failure leaves earlier committed chunks in place.
      */
     suspend fun bulkInsert(
         sequence: Sequence<T>,
@@ -144,8 +151,8 @@ interface IDocStore<T : Any> {
      * Bulk insert any [iterable] (List, Set, etc.).
      *
      * Specify [chunkSize] to control how many documents
-     * are inserted for each page. Note, unless you surround this with transact,
-     * no transaction is used.
+     * are inserted for each page. Each chunk commits independently unless you surround this with [transact].
+     * An upstream failure leaves earlier committed chunks in place.
      */
     suspend fun bulkInsert(
         iterable: Iterable<T>,
@@ -156,8 +163,8 @@ interface IDocStore<T : Any> {
      * Bulk insert documents from a [flow].
      *
      * Specify [chunkSize] to control how many documents
-     * are inserted for each page. Note, unless you surround this with transact,
-     * no transaction is used.
+     * are inserted for each page. Each chunk commits independently unless you surround this with [transact].
+     * An upstream failure leaves earlier committed chunks in place.
      *
      * Useful in combination with [documentsByRecencyScrolling], which returns a flow of documents.
      */
@@ -167,8 +174,8 @@ interface IDocStore<T : Any> {
      * Bulk insert documents from an [iterable].
      *
      * Specify [chunkSize] to control how many documents
-     * are inserted for each page. Note, unless you surround this with transact,
-     * no transaction is used.
+     * are inserted for each page. Each chunk commits independently unless you surround this with [transact].
+     * An upstream failure leaves earlier committed chunks in place.
      */
     suspend fun bulkInsertWithId(iterable: Iterable<Pair<String, T>>, chunkSize: Int = 100)
 
@@ -176,8 +183,8 @@ interface IDocStore<T : Any> {
      * Bulk insert documents from a [sequence].
      *
      * Specify [chunkSize] to control how many documents
-     * are inserted for each page. Note, unless you surround this with transact,
-     * no transaction is used.
+     * are inserted for each page. Each chunk commits independently unless you surround this with [transact].
+     * An upstream failure leaves earlier committed chunks in place.
      */
     suspend fun bulkInsertWithId(sequence: Sequence<Pair<String, T>>, chunkSize: Int = 100)
 
@@ -200,7 +207,8 @@ interface IDocStore<T : Any> {
      * a logical OR will be used instead of the default AND.
      *
      * You can also specify a text [query]. In that case the results will be ordered by
-     * their ranking. You can use [similarityThreshold] to control how strict it matches.
+     * their ranking. [similarityThreshold] must be between 0 and 1; 1 uses LIKE matching.
+     * [limit] and [offset] must not be negative.
      */
     suspend fun documentsByRecency(
         tags: List<String> = emptyList(),
@@ -237,13 +245,15 @@ interface IDocStore<T : Any> {
      * to the flow as it comes in.
      *
      * You can use this to efficiently process all documents in your store.
+     * [fetchSize] must be positive. Collection holds a connection and a transaction until it completes or is cancelled.
+     * An existing transaction is reused; collect the flow inside its [transact] block.
      *
      * You can optionally constrain
      * the query with [tags]. If you set [whereClauseOperator] to OR,
      * a logical OR will be used instead of the default AND.
      *
      * You can also specify a text [query]. In that case the results will be ordered by
-     * their ranking. You can use [similarityThreshold] to control how strict it matches.
+     * their ranking. [similarityThreshold] must be between 0 and 1; 1 uses LIKE matching.
      */
     suspend fun documentsByRecencyScrolling(
         tags: List<String> = emptyList(),
@@ -273,14 +283,12 @@ interface IDocStore<T : Any> {
         ): Flow<DocStoreEntry>
 
     /**
-     * Updates all documents in the store and re-runs all the extract functions.
+     * Refreshes the extracted tags and text in bounded pages, preserving JSON, row ids and creation timestamps.
+     * Successfully refreshed rows receive a new updated timestamp.
      *
-     * This is useful when you change the way those functions work.
-     *
-     * Note, this may take a while to run on a big database.
-     * Also, while documentsByRecencyScrolling necessarily has its
-     * own transaction (scrolling has to be done in a transaction), bulkInsert does not.
-     * You can wrap the bulkInsert with a separate transaction but it will be a separate one.
+     * This is useful when you change the extract functions. Concurrent updates and deletions win:
+     * rows whose JSON changed after being read are skipped. Run again to refresh any skipped rows.
+     * Each derived-column update commits independently unless called inside [transact].
      */
     suspend fun reExtract()
 }

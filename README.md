@@ -299,7 +299,7 @@ println(
 This prints:
 
 ```text
-five most recent documents: [Bulk 199, Bulk 198, Bulk 197, Bulk 196, Bulk 195]
+five most recent documents: [Bulk 170, Bulk 178, Bulk 163, Bulk 194, Bulk 167]
 Total documents: 202
 202
 Just the bulk tagged documents: 200
@@ -333,18 +333,23 @@ Found:
 -The quick brown fox
 -Foo
 -Bar
--Bulk 2
+-Bulk 3
 -Bulk 1
 ```
 
 ### Transactions
 
-Most operations in the docstore are single sql statements and don't use a transaction. However,
-you can of course control this if you need to, e.g. modify multiple documents in one transaction.                
+Single-statement writes commit automatically. Use `transact` to group operations atomically.
+Updates lock the document row before running your callback and join the enclosing transaction.
+Bulk inserts commit each chunk independently unless explicitly wrapped in `transact`.
 
-The `transact` function creates a new docstore with it's own isolated connection and the same parameters 
-as its parent. The isolated connection is used for the duration of 
-the transaction and exclusive to your code block. It will commit / rollback as needed. 
+The `transact` function supplies a store bound to one connection. Use that store for all operations
+in the transaction, sequentially, and collect any flows before returning. Nested calls reuse the
+transaction without creating savepoints. Keep update callbacks short because they hold a row lock.
+
+JDBC statements respond to coroutine cancellation, and transactions check cancellation before committing.
+Cancellation or a connection failure during commit can still leave the outcome uncertain; retries need
+to be idempotent.
 
 ```kotlin
 store.transact { tStore ->
@@ -409,6 +414,17 @@ This prints:
 in the transaction it exists as: Transactional
 after the rollback null
 ```
+
+## Scrolling and re-extraction
+
+Scrolling uses a PostgreSQL cursor with a positive fetch size. The flow holds a connection and transaction
+for the duration of collection, including time spent waiting for a slow consumer. Completion and cancellation
+close the cursor and release an owned connection. Inside `transact`, the flow reuses the transaction's connection.
+
+`reExtract()` refreshes tags and searchable text in bounded pages. It preserves document JSON, explicit row ids,
+and creation timestamps. Refreshed rows receive a new `updated_at` timestamp. Concurrent updates and deletions
+take precedence; rows whose JSON changed after being read are skipped.
+Run it again if those rows also need refreshing. Wrap it in `transact` when the entire refresh must be atomic.
 
 ## Future work
 

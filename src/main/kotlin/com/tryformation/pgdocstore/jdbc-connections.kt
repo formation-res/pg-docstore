@@ -24,10 +24,7 @@ fun connectionPool(
     this.maxLifetime = maxLifetime
     this.connectionTimeout = connectionTimeout
 
-    // PostgreSQL specific performance tweaks
-    addDataSourceProperty("cachePrepStmts", "true")
-    addDataSourceProperty("prepStmtCacheSize", "250")
-    addDataSourceProperty("prepStmtCacheSqlLimit", "2048")
+    // Let PostgreSQL infer parameter types, including array and extension operator arguments.
     addDataSourceProperty("stringtype", "unspecified")
 }.let {
     HikariDataSource(it)
