@@ -234,6 +234,17 @@ val readmeMd = sourceGitRepository.md {
                 mdCodeBlock(it.stdOut, "text")
             }
         }
+        subSection("Batch deletion") {
+            +"""
+                Use `store.deleteByIds(listOf("id-1", "id-2"))` to delete known IDs in one atomic statement.
+                It returns a `Long` count of deleted rows. Missing IDs are ignored and duplicates count once.
+                Empty input returns zero without opening a connection. Inside `transact`, use the supplied store
+                to include the deletion in that transaction.
+
+                IDs are bound as one PostgreSQL array, so large batches do not need a placeholder per ID or
+                commit in chunks. The array is held in memory and must fit PostgreSQL's array and message size limits.
+            """.trimIndent()
+        }
         subSection("Bulk inserting documents") {
             +"""
                 Inserting documents one at the time is not

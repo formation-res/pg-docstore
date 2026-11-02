@@ -146,6 +146,39 @@ class ReliabilityTest : DbTestBase() {
     }
 
     @Test
+    fun `cancellation cancels a blocked batch deletion before the lock is released`() = coRun {
+        val ds = store()
+        val doc = TaggedModel("keep")
+        ds.create(doc)
+        val locked = CompletableDeferred<Unit>()
+        val releaseLock = CompletableDeferred<Unit>()
+        coroutineScope {
+            val holder = async {
+                db.withTransaction { conn ->
+                    conn.prepareStatement("SELECT id FROM $tableName WHERE id = ? FOR UPDATE").use { ps ->
+                        ps.setString(1, doc.id)
+                        ps.executeQuery().use { rs -> assertTrue(rs.next()) }
+                    }
+                    locked.complete(Unit)
+                    releaseLock.await()
+                }
+            }
+            locked.await()
+            val deletion = async { ds.deleteByIds(listOf(doc.id)) }
+            try {
+                awaitBlockedQuery()
+                deletion.cancel()
+                withTimeout(5000) { deletion.join() }
+            } finally {
+                releaseLock.complete(Unit)
+            }
+            holder.await()
+        }
+        assertEquals(doc, ds.getById(doc.id))
+        assertEquals(1L, ds.deleteByIds(listOf(doc.id)))
+    }
+
+    @Test
     fun `transaction helper rolls back cancellation observed after blocking work`() = coRun {
         val doc = TaggedModel("before")
         store().create(doc)

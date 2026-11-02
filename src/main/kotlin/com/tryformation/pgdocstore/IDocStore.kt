@@ -122,6 +122,17 @@ interface IDocStore<T : Any> {
     suspend fun delete(id: String)
 
     /**
+     * Deletes documents with the given [ids] and returns the number of rows deleted.
+     * Missing ids are ignored; duplicate ids do not increase the count.
+     * Empty input returns zero without opening a connection.
+     *
+     * Uses one atomic DELETE statement with a bound PostgreSQL array, including for large batches.
+     * The array is held in memory and must fit PostgreSQL's array and message size limits.
+     * Joins the enclosing [transact] transaction and responds to coroutine cancellation.
+     */
+    suspend fun deleteByIds(ids: Collection<String>): Long
+
+    /**
      * Bulk insert documents from a [flow].
      *
      * Specify [chunkSize] to control how many documents
