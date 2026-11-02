@@ -321,6 +321,22 @@ class DocStore<T : Any>(
         }
     }
 
+    override suspend fun deleteByIds(ids: Collection<String>): Long {
+        if (ids.isEmpty()) return 0L
+
+        return withDocStoreConnection { connection ->
+            val array = connection.createArrayOf("text", ids.toTypedArray())
+            try {
+                connection.prepareStatement("DELETE FROM $tableName WHERE id = ANY (?::text[])").use { statement ->
+                    statement.setArray(1, array)
+                    statement.withCancellation { statement.executeLargeUpdate() }
+                }
+            } finally {
+                array.free()
+            }
+        }
+    }
+
     override suspend fun bulkInsert(
         flow: Flow<T>,
         chunkSize: Int, delayMillis: Duration
