@@ -128,6 +128,8 @@ interface IDocStore<T : Any> {
      *
      * Uses one atomic DELETE statement with a bound PostgreSQL array, including for large batches.
      * The array is held in memory and must fit PostgreSQL's array and message size limits.
+     * The database may reject requests with too many ids or excessively long ids. Use your discretion when
+     * choosing a batch size: memory use, execution time, and lock duration depend on your data and workload.
      * Joins the enclosing [transact] transaction and responds to coroutine cancellation.
      */
     suspend fun deleteByIds(ids: Collection<String>): Long

@@ -243,6 +243,8 @@ val readmeMd = sourceGitRepository.md {
 
                 IDs are bound as one PostgreSQL array, so large batches do not need a placeholder per ID or
                 commit in chunks. The array is held in memory and must fit PostgreSQL's array and message size limits.
+                The database may reject requests with too many IDs or excessively long IDs. Use your discretion when
+                choosing a batch size: memory use, execution time, and lock duration depend on your data and workload.
             """.trimIndent()
         }
         subSection("Bulk inserting documents") {
