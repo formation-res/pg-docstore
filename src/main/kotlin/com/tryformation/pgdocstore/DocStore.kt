@@ -47,8 +47,41 @@ class DocStore<T : Any>(
     private val connection: Connection? = null,
 
     ) : IDocStore<T> {
+    // Kept out of the public constructor to preserve its JVM/default-argument signatures.
+    private var transaction: DocStoreTransaction? = null
+
+    private fun checkTransactionActive() {
+        transaction?.checkActive()
+    }
+
+    internal fun bindTo(scope: DocStoreTransaction): IDocStore<T> {
+        scope.checkActive()
+        checkTransactionActive()
+        require(dataSource === scope.dataSource) {
+            "A bound store must use the transaction's DataSource instance"
+        }
+        if (connection != null) {
+            require(transaction === scope) { "Store is already bound to another connection or transaction" }
+            return this
+        }
+        return DocStore(
+            dataSource = dataSource,
+            serializationStrategy = serializationStrategy,
+            tableName = tableName,
+            json = json,
+            tagExtractor = tagExtractor,
+            textExtractor = textExtractor,
+            indexNormalizer = indexNormalizer,
+            queryNormalizer = queryNormalizer,
+            idExtractor = idExtractor,
+            logging = logging,
+            connection = scope.connection
+        ).also { it.transaction = scope }
+    }
+
     private suspend fun <R> withDocStoreConnection(block: suspend (Connection) -> R): R =
         if (connection != null) onDatabaseDispatcher {
+            checkTransactionActive()
             currentCoroutineContext().ensureActive()
             block(connection)
         } else dataSource.withConnection(block)
@@ -56,24 +89,11 @@ class DocStore<T : Any>(
     private suspend fun <R> withDocStoreTransaction(block: suspend (Connection) -> R): R =
         if (connection != null) withDocStoreConnection(block) else dataSource.withTransaction(block)
 
-    override suspend fun <R> transact(block: suspend (IDocStore<T>) -> R): R =
-        if (connection != null) block(this) else dataSource.withTransaction { conn ->
-            block(
-                DocStore(
-                    dataSource = dataSource,
-                    serializationStrategy = serializationStrategy,
-                    tableName = tableName,
-                    json = json,
-                    tagExtractor = tagExtractor,
-                    textExtractor = textExtractor,
-                    indexNormalizer = indexNormalizer,
-                    queryNormalizer = queryNormalizer,
-                    idExtractor = idExtractor,
-                    logging = logging,
-                    connection = conn
-                )
-            )
-        }
+    override suspend fun <R> transact(block: suspend (IDocStore<T>) -> R): R {
+        checkTransactionActive()
+        return if (connection != null) block(this)
+        else dataSource.transact { block(bind(this@DocStore)) }
+    }
 
     override suspend fun create(doc: T, timestamp: Instant, onConflictUpdate: Boolean): DocStoreEntry {
         return create(idExtractor.invoke(doc), doc, timestamp, onConflictUpdate)
@@ -144,6 +164,7 @@ class DocStore<T : Any>(
     }
 
     override suspend fun multiGetById(ids: List<String>): List<T> {
+        checkTransactionActive()
         if (ids.isEmpty()) return emptyList()
 
         return withDocStoreConnection { connection ->
@@ -205,6 +226,7 @@ class DocStore<T : Any>(
     }
 
     override suspend fun multiGetEntryById(ids: List<String>): List<DocStoreEntry> {
+        checkTransactionActive()
         if (ids.isEmpty()) return emptyList()
 
         return withDocStoreConnection { connection ->
@@ -322,6 +344,7 @@ class DocStore<T : Any>(
     }
 
     override suspend fun deleteByIds(ids: Collection<String>): Long {
+        checkTransactionActive()
         if (ids.isEmpty()) return 0L
 
         return withDocStoreConnection { connection ->
@@ -342,6 +365,7 @@ class DocStore<T : Any>(
         chunkSize: Int, delayMillis: Duration
     ) {
 
+        checkTransactionActive()
         bulkInsertWithId(
             flow = flow.map { d ->
                 idExtractor.invoke(d) to d
@@ -355,6 +379,7 @@ class DocStore<T : Any>(
         sequence: Sequence<T>,
         chunkSize: Int
     ) {
+        checkTransactionActive()
         bulkInsertWithId(
             sequence = sequence.map { d ->
                 idExtractor.invoke(d) to d
@@ -367,6 +392,7 @@ class DocStore<T : Any>(
         iterable: Iterable<T>,
         chunkSize: Int
     ) {
+        checkTransactionActive()
         bulkInsertWithId(
             sequence = iterable.asSequence().map { d ->
                 idExtractor.invoke(d) to d
@@ -376,6 +402,7 @@ class DocStore<T : Any>(
     }
 
     override suspend fun bulkInsertWithId(flow: Flow<Pair<String, T>>, chunkSize: Int, delayMillis: Duration) {
+        checkTransactionActive()
         if (logging) logger.info { "$tableName start bulk inserting" }
 
         flow.chunked(chunkSize = chunkSize, delayMillis = delayMillis).collect { chunk ->
@@ -386,16 +413,19 @@ class DocStore<T : Any>(
     }
 
     override suspend fun bulkInsertWithId(iterable: Iterable<Pair<String, T>>, chunkSize: Int) {
+        checkTransactionActive()
         bulkInsertWithId(iterable.asSequence(), chunkSize)
     }
 
     override suspend fun bulkInsertWithId(sequence: Sequence<Pair<String, T>>, chunkSize: Int) {
+        checkTransactionActive()
         sequence.chunked(chunkSize).forEach { chunk ->
             insertList(chunk)
         }
     }
 
     override suspend fun insertList(chunk: List<Pair<String, T>>, timestamp: Instant) {
+        checkTransactionActive()
         if (chunk.isEmpty()) return
 
         withDocStoreConnection { connection ->
@@ -681,6 +711,7 @@ class DocStore<T : Any>(
         fetchSize: Int,
         rowProcessor: (java.sql.ResultSet) -> R
     ): Flow<R> {
+        checkTransactionActive()
         require(fetchSize > 0) { "fetchSize must be positive" }
         return flow {
             withQueryConnection(query, cursor = true) { conn ->
