@@ -370,6 +370,38 @@ val readmeMd = sourceGitRepository.md {
                 in the transaction, sequentially, and collect any flows before returning. Nested calls reuse the
                 transaction without creating savepoints. Keep update callbacks short because they hold a row lock.
 
+                To update different tables and document types atomically, use the `DataSource.transact` extension
+                and bind each store to its transaction:
+
+                ```kotlin
+                import com.tryformation.pgdocstore.transact
+
+                dataSource.transact {
+                    val users = bind(userStore)
+                    val memberships = bind(membershipStore)
+
+                    users.update(userId) { it.copy(/* user changes */) }
+                    memberships.update(membershipId) { it.copy(/* membership changes */) }
+                }
+                ```
+
+                All participating stores must be concrete `DocStore<T>` instances created with the exact same
+                `DataSource` instance. `bind` returns an `IDocStore<T>` with its original serialization, tag, text,
+                and ID configuration. Original, unbound stores continue to use their own connections.
+                No schema changes or database constraints are required.
+
+                The block returns its result and commits all bound-store writes together. An exception or cancellation
+                rolls them back together. Bound stores and transaction scopes expire when the block ends; later use
+                throws `IllegalStateException`, including collecting a flow obtained inside the block.
+                Use bound stores sequentially and finish collecting a cursor flow before another operation on the
+                same transaction connection. Concurrent operations on bound stores are unsupported.
+
+                Calling `transact` on a bound store joins the transaction without a savepoint or independent commit.
+                Catching an application exception inside the block does not itself mark the transaction for rollback;
+                PostgreSQL errors can still leave the transaction aborted. A new `dataSource.transact` call always
+                starts an independent transaction, including when nested. Use the existing bindings to participate
+                in the outer transaction. Stores already bound to another transaction or connection are rejected.
+
                 JDBC statements respond to coroutine cancellation, and transactions check cancellation before committing.
                 Cancellation or a connection failure during commit can still leave the outcome uncertain; retries need
                 to be idempotent.
