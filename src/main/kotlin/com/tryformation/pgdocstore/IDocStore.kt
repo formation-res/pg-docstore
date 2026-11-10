@@ -212,6 +212,29 @@ interface IDocStore<T : Any> {
     suspend fun count(): Long
 
     /**
+     * Reads up to [limit] documents after applying [filter]. The limit must be nonnegative.
+     * Ordering uses storage columns. Update timestamp ties are ordered by storage ID.
+     */
+    suspend fun find(filter: DocFilter, limit: Int = 100, order: DocOrder = DocOrder.IdAscending): List<T> =
+        throw UnsupportedOperationException("This store does not support composable filters")
+
+    /** Counts matching rows in PostgreSQL without loading their documents. */
+    suspend fun count(filter: DocFilter): Long =
+        throw UnsupportedOperationException("This store does not support composable filters")
+
+    /**
+     * Reads up to [limit] matching storage IDs ordered by update timestamp and then storage ID.
+     * Pass the previous page's cursor as [after]. The limit must be positive.
+     * Each call observes the current transaction's view. Separate calls can see concurrent changes.
+     */
+    suspend fun pageIds(filter: DocFilter, after: DocCursor? = null, limit: Int = 100): DocPage<String> =
+        throw UnsupportedOperationException("This store does not support composable filters")
+
+    /** Same cursor and ordering as [pageIds], returning deserialized documents. */
+    suspend fun pageDocuments(filter: DocFilter, after: DocCursor? = null, limit: Int = 100): DocPage<T> =
+        throw UnsupportedOperationException("This store does not support composable filters")
+
+    /**
      * Returns a list of documents ordered by recency. This fetches a maximum of [limit] document
      * from the specified [offset]
      *

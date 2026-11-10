@@ -3,12 +3,15 @@ package com.tryformation.pgdocstore
 import com.jillesvangurp.serializationext.DEFAULT_JSON
 import java.sql.Connection
 import java.sql.PreparedStatement
+import java.sql.ResultSet
 import java.sql.Timestamp
 import javax.sql.DataSource
 import kotlin.reflect.KProperty
 import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Instant
+import kotlin.time.toJavaInstant
+import kotlin.time.toKotlinInstant
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -469,23 +472,82 @@ class DocStore<T : Any>(
         }
     }
 
-    override suspend fun count(): Long {
-        return withDocStoreConnection { connection ->
-            connection.prepareStatement(
-                """
-            SELECT COUNT(*) FROM $tableName
-            """.trimIndent()
-            ).use { statement ->
-                statement.query { resultSet ->
-                    if (resultSet.next()) {
-                        resultSet.getLong(1)
-                    } else {
-                        0L
-                    }
-                }
+    override suspend fun count(): Long = count(allOf())
+
+    override suspend fun count(filter: DocFilter): Long {
+        val params = mutableListOf<Any>()
+        val where = filter.toSql(params)
+        return readQuery(Query("SELECT count(*) FROM $tableName WHERE $where", params)) { rows ->
+            rows.next()
+            rows.getLong(1)
+        }
+    }
+
+    override suspend fun find(filter: DocFilter, limit: Int, order: DocOrder): List<T> {
+        require(limit >= 0) { "limit must not be negative" }
+        val params = mutableListOf<Any>()
+        val where = filter.toSql(params)
+        val sort = when (order) {
+            DocOrder.IdAscending -> "id"
+            DocOrder.UpdatedAtAscending -> "updated_at, id"
+        }
+        params.add(limit)
+        return readQuery(Query("SELECT json FROM $tableName WHERE $where ORDER BY $sort LIMIT ?", params)) { rows ->
+            buildList {
+                while (rows.next()) add(decodeDocument(rows))
             }
         }
     }
+
+    override suspend fun pageIds(filter: DocFilter, after: DocCursor?, limit: Int): DocPage<String> =
+        readPage(filter, after, limit, "id, updated_at") { it.getString("id") }
+
+    override suspend fun pageDocuments(filter: DocFilter, after: DocCursor?, limit: Int): DocPage<T> =
+        readPage(filter, after, limit, "id, updated_at, json", ::decodeDocument)
+
+    private suspend fun <R> readPage(
+        filter: DocFilter,
+        after: DocCursor?,
+        limit: Int,
+        columns: String,
+        read: (ResultSet) -> R,
+    ): DocPage<R> {
+        require(limit > 0) { "limit must be positive" }
+        val params = mutableListOf<Any>()
+        val fetchSize = limit.toLong() + 1
+        fun selectPage(cursorClause: String = "", cursorParams: List<Any> = emptyList()): String {
+            val predicate = filter.toSql(params)
+            params.addAll(cursorParams)
+            params.add(fetchSize)
+            return "SELECT $columns FROM $tableName WHERE ($predicate)$cursorClause ORDER BY updated_at, id LIMIT ?"
+        }
+        val sql = when {
+            after == null -> selectPage()
+            after.updatedAt == null -> selectPage(" AND updated_at IS NULL AND id > ?", listOf(after.id))
+            else -> {
+                // Keep the tuple comparison indexable. OR-ing it with the null check can rescan earlier pages.
+                val dated = selectPage(" AND (updated_at, id) > (?, ?)", listOf(
+                    Timestamp.from(after.updatedAt.toJavaInstant()), after.id
+                ))
+                val undated = selectPage(" AND updated_at IS NULL")
+                params.add(fetchSize)
+                "SELECT $columns FROM (($dated) UNION ALL ($undated)) AS page ORDER BY updated_at, id LIMIT ?"
+            }
+        }
+        return readQuery(Query(sql, params)) { rows ->
+            val items = mutableListOf<R>()
+            var last: DocCursor? = null
+            while (rows.next()) {
+                if (items.size == limit) return@readQuery DocPage(items, last)
+                items.add(read(rows))
+                last = DocCursor(rows.getTimestamp("updated_at")?.toInstant()?.toKotlinInstant(), rows.getString("id"))
+            }
+            DocPage(items, null)
+        }
+    }
+
+    private fun decodeDocument(rows: ResultSet): T =
+        json.decodeFromString(serializationStrategy, rows.getString("json"))
 
     override suspend fun documentsByRecency(
         tags: List<String>,
@@ -510,16 +572,9 @@ class DocStore<T : Any>(
                 updatedAtAfter = updatedAtAfter,
                 updatedAtBefore = updatedAtBefore
             )
-        return withQueryConnection(sql) { connection ->
-            connection.prepareStatement(sql.sql).use { statement ->
-                setQueryParams(statement, sql.params)
-                statement.query { rs ->
-                    val result = mutableListOf<T>()
-                    while (rs.next()) {
-                        result += json.decodeFromString(serializationStrategy, rs.getString("json"))
-                    }
-                    result
-                }
+        return readQuery(sql) { rows ->
+            buildList {
+                while (rows.next()) add(decodeDocument(rows))
             }
         }
     }
@@ -547,16 +602,9 @@ class DocStore<T : Any>(
                 updatedAtAfter = updatedAtAfter,
                 updatedAtBefore = updatedAtBefore
             )
-        return withQueryConnection(sql) { connection ->
-            connection.prepareStatement(sql.sql).use { statement ->
-                setQueryParams(statement, sql.params)
-                statement.query { rs ->
-                    val result = mutableListOf<DocStoreEntry>()
-                    while (rs.next()) {
-                        result += toEntry(rs)
-                    }
-                    result
-                }
+        return readQuery(sql) { rows ->
+            buildList {
+                while (rows.next()) add(toEntry(rows))
             }
         }
     }
@@ -582,10 +630,9 @@ class DocStore<T : Any>(
             updatedAtAfter = updatedAtAfter,
             updatedAtBefore = updatedAtBefore
         ),
-        fetchSize
-    ) { rs ->
-        json.decodeFromString(serializationStrategy, rs.getString("json"))
-    }
+        fetchSize,
+        ::decodeDocument
+    )
 
     override suspend fun entriesByRecencyScrolling(
         tags: List<String>,
@@ -611,7 +658,7 @@ class DocStore<T : Any>(
         fetchSize
     ) { rs -> toEntry(rs) }
 
-    private data class Query(val sql: String, val params: List<Any>, val similarityThreshold: Double?)
+    private data class Query(val sql: String, val params: List<Any>, val similarityThreshold: Double? = null)
 
     private fun constructQuery(
         tags: List<String>,
@@ -638,8 +685,7 @@ class DocStore<T : Any>(
         } else ""
         val clauses = mutableListOf<String>()
         if (tags.isNotEmpty()) {
-            params.add(tags)
-            clauses += "tags ${if (tagsClauseOperator == BooleanOperator.AND) "@>" else "&&"} ?::text[]"
+            clauses += DocFilter.Tags(tags, tagsClauseOperator).toSql(params)
         }
         if (normalizedQuery != null) {
             params += normalizedQuery
@@ -661,6 +707,14 @@ class DocStore<T : Any>(
             if (logging) logger.info { it.sql }
         }
     }
+
+    private suspend fun <R> readQuery(query: Query, read: suspend (ResultSet) -> R): R =
+        withQueryConnection(query) { connection ->
+            connection.prepareStatement(query.sql).use { statement ->
+                setQueryParams(statement, query.params)
+                statement.query(read)
+            }
+        }
 
     private suspend fun <R> withQueryConnection(
         query: Query,
