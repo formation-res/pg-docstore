@@ -4,9 +4,13 @@ package com.tryformation.pgdocstore.docs
 
 import com.jillesvangurp.kotlin4example.SourceRepository
 import com.tryformation.pgdocstore.DocStore
+import com.tryformation.pgdocstore.allOf
 import com.tryformation.pgdocstore.connectionPool
 import com.tryformation.pgdocstore.createDocStoreTable
 import com.tryformation.pgdocstore.dropDocStoreTable
+import com.tryformation.pgdocstore.not
+import com.tryformation.pgdocstore.tagsAll
+import com.tryformation.pgdocstore.tagsAny
 import java.io.File
 import java.util.UUID
 import kotlin.time.Duration.Companion.milliseconds
@@ -357,6 +361,50 @@ val readmeMd = sourceGitRepository.md {
                 """.trimIndent()
                 mdCodeBlock(it.stdOut, "text")
             }
+        }
+        subSection("Composing filters") {
+            +"""
+                Compose exact tag, storage ID, and update timestamp predicates with `allOf`, `anyOf`, and `not`.
+                Tags come from the store's `tagExtractor`. PostgreSQL can use the standard GIN tags index for positive
+                exact tag predicates. `idsIn` matches the row ID, which can differ from the document's ID.
+                `updatedAt` filters the row's update timestamp using inclusive bounds.
+
+                For example, match bulk documents assigned to either team and exclude archived documents.
+            """.trimIndent()
+
+            example {
+                val filter = allOf(
+                    tagsAll("bulk"),
+                    tagsAny("team:a", "team:b"),
+                    not(tagsAny("archived")),
+                )
+
+                val documents = store.find(filter, limit = 20)
+                val total = store.count(filter)
+                val first = store.pageIds(filter, limit = 100)
+                val second = first.nextCursor?.let {
+                    store.pageIds(filter, after = it, limit = 100)
+                }
+            }
+
+            +"""
+                `find` applies the filter before the limit and sorts by storage ID by default. Use
+                `DocOrder.UpdatedAtAscending` to sort by update time and then storage ID.
+
+                `count(filter)` counts matching rows in PostgreSQL. `pageIds` reads storage IDs and their cursor
+                columns, and `pageDocuments` returns decoded documents using the same cursor. Both page methods
+                sort by ascending update timestamp and storage ID, with null timestamps last. Pass the returned
+                cursor with the same filter until it is null. Each call outside a transaction releases its
+                connection before returning. Separate calls can observe concurrent changes. A fixed update-time
+                upper bound limits the scan, while transaction isolation determines whether pages share a snapshot.
+
+                An empty `allOf` or `tagsAll` matches every row. An empty `anyOf`, `tagsAny`, or `idsIn` matches
+                zero rows. A row with null tags fails a nonempty positive tag filter and matches its negation.
+                An update-time filter with a bound excludes rows with a null update timestamp.
+
+                Use the bound store to run these operations inside a transaction. Alternative `IDocStore`
+                implementations can opt in by overriding the new methods.
+            """.trimIndent()
         }
         logger.info { "transactions" }
 
