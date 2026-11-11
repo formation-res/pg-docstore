@@ -237,6 +237,21 @@ val readmeMd = sourceGitRepository.md {
                 """.trimIndent()
                 mdCodeBlock(it.stdOut, "text")
             }
+            +"""
+                Use `multiGetByIdFlow` when the caller consumes documents incrementally.
+            """.trimIndent()
+            mdCodeBlock("""
+                store.multiGetByIdFlow(ids, batchSize = 50).collect { document ->
+                    process(document)
+                }
+            """.trimIndent(), "kotlin")
+            +"""
+                The flow loads the next batch on demand. An unbound store returns the connection
+                before emitting documents. Missing IDs are omitted, duplicates are read once,
+                and the order within a batch is unspecified. Use `multiGetEntryByIdFlow` when
+                you need the storage ID or row metadata. Collect transaction-bound flows within
+                the transaction.
+            """.trimIndent()
         }
         subSection("Batch deletion") {
             +"""

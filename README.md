@@ -220,6 +220,20 @@ This prints:
 [Foo, Bar]
 ```
 
+Use `multiGetByIdFlow` when the caller consumes documents incrementally.
+
+```kotlin
+store.multiGetByIdFlow(ids, batchSize = 50).collect { document ->
+  process(document)
+}
+```
+
+The flow loads the next batch on demand. An unbound store returns the connection
+before emitting documents. Missing IDs are omitted, duplicates are read once,
+and the order within a batch is unspecified. Use `multiGetEntryByIdFlow` when
+you need the storage ID or row metadata. Collect transaction-bound flows within
+the transaction.
+
 ### Batch deletion
 
 Use `store.deleteByIds(listOf("id-1", "id-2"))` to delete known IDs in one atomic statement.
