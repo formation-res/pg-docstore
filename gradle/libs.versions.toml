@@ -1,6 +1,6 @@
 [versions]
 kotlin = "2.4.21"
-dokka = "2.2.0"
+dokka = "2.3.0"
 docker-compose = "0.17.21"
 coroutines = "1.11.0"
 serialization = "1.12.0"
