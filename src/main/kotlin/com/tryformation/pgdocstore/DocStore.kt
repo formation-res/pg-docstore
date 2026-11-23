@@ -502,6 +502,30 @@ class DocStore<T : Any>(
     override suspend fun pageIds(filter: DocFilter, after: DocCursor?, limit: Int): DocPage<String> =
         readPage(filter, after, limit, "id, updated_at") { it.getString("id") }
 
+    override suspend fun find(filter: DocFilter, limit: Int, offset: Int, order: List<DocSort>): List<T> {
+        require(limit >= 0 && offset >= 0)
+        val params = mutableListOf<Any>()
+        val where = filter.toSql(params)
+        val sort = docSortSql(order, params)
+        params.add(limit)
+        params.add(offset)
+        return readQuery(Query("SELECT json FROM $tableName WHERE $where ORDER BY $sort LIMIT ? OFFSET ?", params)) { rows ->
+            buildList { while (rows.next()) add(decodeDocument(rows)) }
+        }
+    }
+
+    override suspend fun deleteMatching(filter: DocFilter): Long {
+        checkTransactionActive()
+        val params = mutableListOf<Any>()
+        val predicate = filter.toSql(params)
+        return withDocStoreConnection { connection ->
+            connection.prepareStatement("DELETE FROM $tableName WHERE $predicate").use { statement ->
+                setQueryParams(statement, params)
+                statement.withCancellation { statement.executeLargeUpdate() }
+            }
+        }
+    }
+
     override suspend fun pageDocuments(filter: DocFilter, after: DocCursor?, limit: Int): DocPage<T> =
         readPage(filter, after, limit, "id, updated_at, json", ::decodeDocument)
 
@@ -780,7 +804,9 @@ class DocStore<T : Any>(
         }.flowOn(dbScope)
     }
 
-    override suspend fun reExtract() {
+    override suspend fun reExtract() = reExtract(preserveTimestamps = false)
+
+    override suspend fun reExtract(preserveTimestamps: Boolean) {
         var afterId: String? = null
         while (true) {
             val page = withDocStoreConnection { conn ->
@@ -794,15 +820,27 @@ class DocStore<T : Any>(
             }
             if (page.isEmpty()) break
             withDocStoreConnection { conn ->
-                conn.prepareStatement("UPDATE $tableName SET tags = ?, text = ?, updated_at = ? WHERE id = ? AND json = ?").use { ps ->
+                val sql = if (preserveTimestamps) {
+                    "UPDATE $tableName SET tags = ?, text = ? WHERE id = ? AND json = ? AND (tags IS DISTINCT FROM ?::text[] OR text IS DISTINCT FROM ?)"
+                } else "UPDATE $tableName SET tags = ?, text = ?, updated_at = ? WHERE id = ? AND json = ?"
+                conn.prepareStatement(sql).use { ps ->
                     for ((id, originalJson) in page) {
                         currentCoroutineContext().ensureActive()
                         val doc = json.decodeFromString(serializationStrategy, originalJson)
-                        ps.setArray(1, conn.createArrayOf("text", tagExtractor(doc)?.toTypedArray()))
-                        ps.setString(2, textExtractor(doc)?.let(indexNormalizer))
-                        ps.setTimestamp(3, Clock.System.now().toSqlTimestamp())
-                        ps.setString(4, id)
-                        ps.setString(5, originalJson)
+                        val tags = conn.createArrayOf("text", tagExtractor(doc)?.toTypedArray())
+                        val text = textExtractor(doc)?.let(indexNormalizer)
+                        ps.setArray(1, tags)
+                        ps.setString(2, text)
+                        if (preserveTimestamps) {
+                            ps.setString(3, id)
+                            ps.setString(4, originalJson)
+                            ps.setArray(5, tags)
+                            ps.setString(6, text)
+                        } else {
+                            ps.setTimestamp(3, Clock.System.now().toSqlTimestamp())
+                            ps.setString(4, id)
+                            ps.setString(5, originalJson)
+                        }
                         // Concurrent updates/deletes win; never write back the scanned JSON or insert missing rows.
                         ps.withCancellation { ps.executeUpdate() }
                     }

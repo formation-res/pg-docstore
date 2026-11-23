@@ -405,6 +405,28 @@ val readmeMd = sourceGitRepository.md {
             +"""
                 `find` applies the filter before the limit and sorts by storage ID by default. Use
                 `DocOrder.UpdatedAtAscending` to sort by update time and then storage ID.
+                The offset overload accepts `DocSort.DocumentTime` for payload timestamps, with
+                nulls last and storage ID as the tie breaker. Prefer cursor pages for large traversals.
+
+                Use `stringsMatch` for exact, prefix or wildcard matches on a `DocStringSource`.
+                Document paths are literal key segments; `"*"` expands an array. For example,
+                `DocStringSource.Document(listOf("asset", "codes", "*", "value"))` selects nested code values.
+                Wildcards use `*` and `?`; backslash escapes the next character. Exact alternatives
+                are bound as an array, including large batches. `excludedPrefixes` excludes individual
+                values, and `matchMissing` includes null source values such as legacy extracted text.
+                Document paths producing no values still do not match.
+
+                `documentTime(path, comparison, value)` compares a payload timestamp independently
+                of the storage update timestamp. These document predicates may scan JSON; prefer exact
+                indexed tags and IDs, or combine payload checks with a selective indexed filter.
+                Extracted text uses LIKE/ILIKE directly so both case-sensitive and insensitive matching
+                can use its existing trigram index. Exact extracted-tag matching uses the tags GIN operators.
+                For tag-text candidate filters, callers must ensure extracted text contains the queried tags
+                and retain per-tag checks for exact membership.
+
+                `deleteMatching(filter)` matches and deletes atomically in one SQL statement. It
+                participates in the bound transaction and returns the deleted row count. An empty
+                `allOf()` matches every row, including for deletion; callers must supply their scope.
 
                 `count(filter)` counts matching rows in PostgreSQL. `pageIds` reads storage IDs and their cursor
                 columns, and `pageDocuments` returns decoded documents using the same cursor. Both page methods
@@ -425,6 +447,10 @@ val readmeMd = sourceGitRepository.md {
 
         subSection("Transactions") {
             +"""
+                Use `reExtract(preserveTimestamps = true)` to backfill extracted tags/text without
+                rewriting JSON or changing storage timestamps. Unchanged projections are skipped and
+                concurrent JSON changes win; audit after the pass before enabling dependent reads.
+
                 Single-statement writes commit automatically. Use `transact` to group operations atomically.
                 Updates lock the document row before running your callback and join the enclosing transaction.
                 Bulk inserts commit each chunk independently unless explicitly wrapped in `transact`.
