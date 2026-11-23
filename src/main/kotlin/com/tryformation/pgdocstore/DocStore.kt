@@ -804,7 +804,9 @@ class DocStore<T : Any>(
         }.flowOn(dbScope)
     }
 
-    override suspend fun reExtract() {
+    override suspend fun reExtract() = reExtract(preserveTimestamps = false)
+
+    override suspend fun reExtract(preserveTimestamps: Boolean) {
         var afterId: String? = null
         while (true) {
             val page = withDocStoreConnection { conn ->
@@ -818,15 +820,27 @@ class DocStore<T : Any>(
             }
             if (page.isEmpty()) break
             withDocStoreConnection { conn ->
-                conn.prepareStatement("UPDATE $tableName SET tags = ?, text = ?, updated_at = ? WHERE id = ? AND json = ?").use { ps ->
+                val sql = if (preserveTimestamps) {
+                    "UPDATE $tableName SET tags = ?, text = ? WHERE id = ? AND json = ? AND (tags IS DISTINCT FROM ?::text[] OR text IS DISTINCT FROM ?)"
+                } else "UPDATE $tableName SET tags = ?, text = ?, updated_at = ? WHERE id = ? AND json = ?"
+                conn.prepareStatement(sql).use { ps ->
                     for ((id, originalJson) in page) {
                         currentCoroutineContext().ensureActive()
                         val doc = json.decodeFromString(serializationStrategy, originalJson)
-                        ps.setArray(1, conn.createArrayOf("text", tagExtractor(doc)?.toTypedArray()))
-                        ps.setString(2, textExtractor(doc)?.let(indexNormalizer))
-                        ps.setTimestamp(3, Clock.System.now().toSqlTimestamp())
-                        ps.setString(4, id)
-                        ps.setString(5, originalJson)
+                        val tags = conn.createArrayOf("text", tagExtractor(doc)?.toTypedArray())
+                        val text = textExtractor(doc)?.let(indexNormalizer)
+                        ps.setArray(1, tags)
+                        ps.setString(2, text)
+                        if (preserveTimestamps) {
+                            ps.setString(3, id)
+                            ps.setString(4, originalJson)
+                            ps.setArray(5, tags)
+                            ps.setString(6, text)
+                        } else {
+                            ps.setTimestamp(3, Clock.System.now().toSqlTimestamp())
+                            ps.setString(4, id)
+                            ps.setString(5, originalJson)
+                        }
                         // Concurrent updates/deletes win; never write back the scanned JSON or insert missing rows.
                         ps.withCancellation { ps.executeUpdate() }
                     }

@@ -335,4 +335,8 @@ interface IDocStore<T : Any> {
      * Each derived-column update commits independently unless called inside [transact].
      */
     suspend fun reExtract()
+
+    /** Refreshes derived tags/text without changing JSON. Preserving timestamps also skips unchanged rows. */
+    suspend fun reExtract(preserveTimestamps: Boolean): Unit =
+        throw UnsupportedOperationException("This store does not support timestamp-preserving extraction")
 }

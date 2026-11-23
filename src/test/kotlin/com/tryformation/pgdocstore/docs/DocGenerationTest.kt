@@ -419,7 +419,10 @@ val readmeMd = sourceGitRepository.md {
                 `documentTime(path, comparison, value)` compares a payload timestamp independently
                 of the storage update timestamp. These document predicates may scan JSON; prefer exact
                 indexed tags and IDs, or combine payload checks with a selective indexed filter.
-                A case-sensitive prefix/wildcard directly on extracted text can use its trigram index.
+                Extracted text uses LIKE/ILIKE directly so both case-sensitive and insensitive matching
+                can use its existing trigram index. Exact extracted-tag matching uses the tags GIN operators.
+                For tag-text candidate filters, callers must ensure extracted text contains the queried tags
+                and retain per-tag checks for exact membership.
 
                 `deleteMatching(filter)` matches and deletes atomically in one SQL statement. It
                 participates in the bound transaction and returns the deleted row count. An empty
@@ -444,6 +447,10 @@ val readmeMd = sourceGitRepository.md {
 
         subSection("Transactions") {
             +"""
+                Use `reExtract(preserveTimestamps = true)` to backfill extracted tags/text without
+                rewriting JSON or changing storage timestamps. Unchanged projections are skipped and
+                concurrent JSON changes win; audit after the pass before enabling dependent reads.
+
                 Single-statement writes commit automatically. Use `transact` to group operations atomically.
                 Updates lock the document row before running your callback and join the enclosing transaction.
                 Bulk inserts commit each chunk independently unless explicitly wrapped in `transact`.

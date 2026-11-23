@@ -18,7 +18,10 @@ enum class DocComparison(internal val sql: String) { GreaterThan(">"), AtLeast("
 
 /**
  * Matches any value from [source]. Wildcards use `*` and `?`; a backslash escapes the next character.
- * Exact indexed tags should use [tagsAny] or [tagsAll], and storage IDs should use [idsIn].
+ * Exact extracted-tag matching uses the tags GIN operators; [tagsAll] requires all values.
+ * Case-insensitive extracted-text matching uses ILIKE so the existing trigram index remains eligible.
+ * To use text as a candidate filter for tag matching, callers must guarantee that their text extractor
+ * includes the queried tags and combine it with a per-tag predicate. Storage IDs should use [idsIn].
  * Document paths preserve payload semantics but need a suitable index or a selective enclosing filter.
  * [excludedPrefixes] applies to individual values, not to the whole document.
  * [matchMissing] includes null source values, for example extracted text on legacy rows.
@@ -41,6 +44,13 @@ fun documentTime(path: List<String>, comparison: DocComparison, value: Instant):
 
 internal fun stringPredicateSql(filter: DocFilter.Strings, params: MutableList<Any>): String {
     if (filter.values.isEmpty()) return "FALSE"
+    if (filter.source == DocStringSource.ExtractedTags && filter.match == DocStringMatch.Exact &&
+        !filter.ignoreCase && !filter.matchMissing) {
+        val visible = filter.values.filterNot { value -> filter.excludedPrefixes.any(value::startsWith) }
+        if (visible.isEmpty()) return "FALSE"
+        params.add(visible)
+        return "tags && ?::text[]"
+    }
     val scalar = when (filter.source) {
         DocStringSource.StorageId -> "id"
         DocStringSource.ExtractedText -> "text"
@@ -60,31 +70,27 @@ internal fun stringPredicateSql(filter: DocFilter.Strings, params: MutableList<A
     }
     val patterns = filter.values.map { value ->
         when (filter.match) {
-            DocStringMatch.Exact -> value
+            DocStringMatch.Exact -> if (filter.ignoreCase) escapeLike(value) else value
             DocStringMatch.Prefix -> escapeLike(value) + "%"
             DocStringMatch.Wildcard -> wildcardPattern(value)
         }
     }
     val valueExpression = scalar ?: "v"
-    val left = if (filter.ignoreCase) "lower($valueExpression)" else valueExpression
+    val like = filter.match != DocStringMatch.Exact || filter.ignoreCase
+    val operator = if (filter.ignoreCase) "ILIKE" else "LIKE"
     val checks = when {
-        // Keep a single LIKE directly on the extracted text column so its trigram index remains usable.
-        patterns.size == 1 && filter.match != DocStringMatch.Exact -> {
+        like && patterns.size == 1 -> {
             params.add(patterns.single())
-            val right = if (filter.ignoreCase) "lower(?)" else "?"
-            "$left LIKE $right ESCAPE E'\\\\'"
+            "$valueExpression $operator ? ESCAPE E'\\\\'"
         }
-        filter.match == DocStringMatch.Exact && !filter.ignoreCase -> {
+        like -> {
             params.add(patterns)
-            "$left = ANY (?::text[])"
+            // LIKE/ILIKE ANY uses PostgreSQL's default backslash escape, matching the single-pattern form.
+            "$valueExpression $operator ANY (?::text[])"
         }
         else -> {
-            // One array parameter avoids JDBC's parameter limit for large alternative groups.
             params.add(patterns)
-            val right = if (filter.ignoreCase) "lower(pattern)" else "pattern"
-            val comparison = if (filter.match == DocStringMatch.Exact) "$left = $right"
-                else "$left LIKE $right ESCAPE E'\\\\'"
-            "EXISTS (SELECT 1 FROM unnest(?::text[]) AS patterns(pattern) WHERE $comparison)"
+            "$valueExpression = ANY (?::text[])"
         }
     }
     val exclusions = filter.excludedPrefixes.joinToString("") {

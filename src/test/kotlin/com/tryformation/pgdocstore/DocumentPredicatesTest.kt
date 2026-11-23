@@ -106,4 +106,56 @@ class DocumentPredicatesTest : DbTestBase() {
             assertEquals(emptyList(), store.find(stringsMatch(DocStringSource.Document(listOf("nonexistent') OR TRUE --")), listOf("*"), DocStringMatch.Wildcard)))
         }
     }
+    @Test
+    fun `case insensitive text candidates retain literal per-tag semantics`() = coRun {
+        withStore { store ->
+            val tags = listOf("ExternalId:MiXeD_%'quoted", "ExternalId:other")
+            val a = doc("a", tags).toMutableMap().apply { put("text", JsonPrimitive(tags.joinToString("\n"))) }.let(::JsonObject)
+            val b = doc("b", listOf("ExternalId:mixedxxquoted")).toMutableMap().apply {
+                put("text", JsonPrimitive("ExternalId:mixedxxquoted"))
+            }.let(::JsonObject)
+            store.bulkInsert(listOf(a, b))
+            val value = "externalid:mixed_%'QUOTED"
+            val exact = stringsMatch(DocStringSource.ExtractedTags, listOf(value), ignoreCase = true)
+            val candidate = stringsMatch(DocStringSource.ExtractedText, listOf("*externalid:mixed_%'QUOTED*"),
+                DocStringMatch.Wildcard, ignoreCase = true)
+            assertEquals(listOf(a), store.find(allOf(candidate, exact)))
+            assertEquals(listOf(a), store.find(stringsMatch(DocStringSource.ExtractedText,
+                listOf("externalid:mixed_%'QUOTED\nexternalid:OTHER"), ignoreCase = true)))
+            assertEquals(listOf(a), store.find(stringsMatch(DocStringSource.ExtractedText,
+                listOf("absent", "externalid:mixed_%'QUOTED"), DocStringMatch.Prefix, ignoreCase = true)))
+            assertEquals(listOf(a), store.find(stringsMatch(DocStringSource.ExtractedTags,
+                listOf(tags.first(), "__private__:forged"), excludedPrefixes = listOf("__private__:"))))
+        }
+    }
+
+    @Test
+    fun `extracted index refresh can preserve JSON timestamps and unchanged rows`() = coRun {
+        val table = "refresh_${java.util.UUID.randomUUID().toString().replace("-", "") }"
+        db.createDocStoreTable(table)
+        try {
+            val old = DocStore(dataSource = db, tableName = table, serializationStrategy = JsonObject.serializer(),
+                idExtractor = { it.getValue("id").jsonPrimitive.content })
+            val fresh = DocStore(dataSource = db, tableName = table, serializationStrategy = JsonObject.serializer(),
+                idExtractor = { it.getValue("id").jsonPrimitive.content }, tagExtractor = { listOf("ExternalId:old") },
+                textExtractor = { "ExternalId:old" })
+            val time = Instant.parse("2020-01-01T00:00:00Z")
+            old.create(doc("old", listOf("ExternalId:old")), timestamp = time)
+            val before = old.getEntryById("old")!!
+            fresh.reExtract(preserveTimestamps = true)
+            val after = fresh.getEntryById("old")!!
+            assertEquals(before.json, after.json)
+            assertEquals(before.createdAt, after.createdAt)
+            assertEquals(before.updatedAt, after.updatedAt)
+            assertEquals(listOf("ExternalId:old"), after.tags)
+            assertEquals("ExternalId:old", after.text)
+            suspend fun version() = db.withConnection { connection -> connection.createStatement().use { statement ->
+                statement.executeQuery("SELECT xmin::text FROM $table").use { rows -> rows.next(); rows.getString(1) }
+            } }
+            val unchanged = version()
+            fresh.reExtract(preserveTimestamps = true)
+            assertEquals(unchanged, version())
+        } finally { db.dropDocStoreTable(table) }
+    }
+
 }
