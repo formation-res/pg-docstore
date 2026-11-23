@@ -502,6 +502,30 @@ class DocStore<T : Any>(
     override suspend fun pageIds(filter: DocFilter, after: DocCursor?, limit: Int): DocPage<String> =
         readPage(filter, after, limit, "id, updated_at") { it.getString("id") }
 
+    override suspend fun find(filter: DocFilter, limit: Int, offset: Int, order: List<DocSort>): List<T> {
+        require(limit >= 0 && offset >= 0)
+        val params = mutableListOf<Any>()
+        val where = filter.toSql(params)
+        val sort = docSortSql(order, params)
+        params.add(limit)
+        params.add(offset)
+        return readQuery(Query("SELECT json FROM $tableName WHERE $where ORDER BY $sort LIMIT ? OFFSET ?", params)) { rows ->
+            buildList { while (rows.next()) add(decodeDocument(rows)) }
+        }
+    }
+
+    override suspend fun deleteMatching(filter: DocFilter): Long {
+        checkTransactionActive()
+        val params = mutableListOf<Any>()
+        val predicate = filter.toSql(params)
+        return withDocStoreConnection { connection ->
+            connection.prepareStatement("DELETE FROM $tableName WHERE $predicate").use { statement ->
+                setQueryParams(statement, params)
+                statement.withCancellation { statement.executeLargeUpdate() }
+            }
+        }
+    }
+
     override suspend fun pageDocuments(filter: DocFilter, after: DocCursor?, limit: Int): DocPage<T> =
         readPage(filter, after, limit, "id, updated_at, json", ::decodeDocument)
 

@@ -218,6 +218,14 @@ interface IDocStore<T : Any> {
     suspend fun find(filter: DocFilter, limit: Int = 100, order: DocOrder = DocOrder.IdAscending): List<T> =
         throw UnsupportedOperationException("This store does not support composable filters")
 
+    /** Filters and orders before applying [offset] and [limit]. Prefer cursor pages for large traversals. */
+    suspend fun find(filter: DocFilter, limit: Int, offset: Int, order: List<DocSort> = emptyList()): List<T> =
+        throw UnsupportedOperationException("This store does not support ordered filtered reads")
+
+    /** Matches and deletes in one statement in the current transaction, or its own transaction. */
+    suspend fun deleteMatching(filter: DocFilter): Long =
+        throw UnsupportedOperationException("This store does not support predicate deletion")
+
     /** Counts matching rows in PostgreSQL without loading their documents. */
     suspend fun count(filter: DocFilter): Long =
         throw UnsupportedOperationException("This store does not support composable filters")

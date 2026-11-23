@@ -5,7 +5,7 @@ import kotlin.time.Instant
 import kotlin.time.toJavaInstant
 
 /**
- * A predicate over extracted tags, storage IDs, and storage update timestamps.
+ * A predicate over extracted columns and selected document fields.
  * Use the factory functions to compose filters. Values are bound as JDBC parameters.
  */
 sealed class DocFilter {
@@ -23,6 +23,11 @@ sealed class DocFilter {
 
     /** Restricts the storage update time to the given inclusive bounds. */
     class UpdatedAt internal constructor(val fromInclusive: Instant?, val throughInclusive: Instant?) : DocFilter()
+
+    internal class Strings(val source: DocStringSource, val values: List<String>, val match: DocStringMatch,
+        val ignoreCase: Boolean, val excludedPrefixes: List<String>, val matchMissing: Boolean) : DocFilter()
+
+    internal class DocumentTime(val path: List<String>, val comparison: DocComparison, val value: Instant) : DocFilter()
 }
 
 /** Matches when every child matches. An empty group matches every row. */
@@ -59,6 +64,12 @@ fun updatedAt(fromInclusive: Instant? = null, throughInclusive: Instant? = null)
     DocFilter.UpdatedAt(fromInclusive, throughInclusive)
 
 internal fun DocFilter.toSql(params: MutableList<Any>): String = when (this) {
+    is DocFilter.Strings -> stringPredicateSql(this, params)
+    is DocFilter.DocumentTime -> {
+        params.add(path)
+        params.add(Timestamp.from(value.toJavaInstant()))
+        "(json::jsonb #>> ?::text[])::timestamptz ${comparison.sql} ?"
+    }
     is DocFilter.Group -> {
         if (filters.isEmpty()) {
             if (operator == BooleanOperator.AND) "TRUE" else "FALSE"

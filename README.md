@@ -389,6 +389,25 @@ val second = first.nextCursor?.let {
 
 `find` applies the filter before the limit and sorts by storage ID by default. Use
 `DocOrder.UpdatedAtAscending` to sort by update time and then storage ID.
+The offset overload accepts `DocSort.DocumentTime` for payload timestamps, with
+nulls last and storage ID as the tie breaker. Prefer cursor pages for large traversals.
+
+Use `stringsMatch` for exact, prefix or wildcard matches on a `DocStringSource`.
+Document paths are literal key segments; `"*"` expands an array. For example,
+`DocStringSource.Document(listOf("asset", "codes", "*", "value"))` selects nested code values.
+Wildcards use `*` and `?`; backslash escapes the next character. Exact alternatives
+are bound as an array, including large batches. `excludedPrefixes` excludes individual
+values, and `matchMissing` includes null source values such as legacy extracted text.
+Document paths producing no values still do not match.
+
+`documentTime(path, comparison, value)` compares a payload timestamp independently
+of the storage update timestamp. These document predicates may scan JSON; prefer exact
+indexed tags and IDs, or combine payload checks with a selective indexed filter.
+A case-sensitive prefix/wildcard directly on extracted text can use its trigram index.
+
+`deleteMatching(filter)` matches and deletes atomically in one SQL statement. It
+participates in the bound transaction and returns the deleted row count. An empty
+`allOf()` matches every row, including for deletion; callers must supply their scope.
 
 `count(filter)` counts matching rows in PostgreSQL. `pageIds` reads storage IDs and their cursor
 columns, and `pageDocuments` returns decoded documents using the same cursor. Both page methods
